@@ -1,0 +1,142 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  frontend-check:
+    name: Frontend build check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Detect frontend package
+        id: detect_frontend
+        shell: bash
+        run: |
+          if [ -f "package.json" ]; then
+            echo "frontend_dir=." >> "$GITHUB_OUTPUT"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          elif [ -f "hr-ai-consulting/package.json" ]; then
+            echo "frontend_dir=hr-ai-consulting" >> "$GITHUB_OUTPUT"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Node.js
+        if: steps.detect_frontend.outputs.found == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        if: steps.detect_frontend.outputs.found == 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install frontend dependencies
+        if: steps.detect_frontend.outputs.found == 'true'
+        working-directory: ${{ steps.detect_frontend.outputs.frontend_dir }}
+        run: |
+          if [ -f "pnpm-lock.yaml" ]; then
+            pnpm install --frozen-lockfile
+          else
+            pnpm install
+          fi
+
+      - name: TypeScript check
+        if: steps.detect_frontend.outputs.found == 'true'
+        working-directory: ${{ steps.detect_frontend.outputs.frontend_dir }}
+        run: |
+          if [ -f "tsconfig.json" ]; then
+            pnpm exec tsc --noEmit
+          else
+            echo "No tsconfig.json found. Skipping TypeScript check."
+          fi
+
+      - name: Frontend build
+        if: steps.detect_frontend.outputs.found == 'true'
+        working-directory: ${{ steps.detect_frontend.outputs.frontend_dir }}
+        run: pnpm build
+
+      - name: Skip frontend check
+        if: steps.detect_frontend.outputs.found != 'true'
+        run: echo "No package.json found. Skipping frontend check."
+
+  backend-check:
+    name: Backend smoke check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Detect backend directory
+        id: detect_backend
+        shell: bash
+        run: |
+          if [ -d "backend" ]; then
+            echo "backend_dir=backend" >> "$GITHUB_OUTPUT"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          elif [ -d "hr-ai-consulting/backend" ]; then
+            echo "backend_dir=hr-ai-consulting/backend" >> "$GITHUB_OUTPUT"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Python
+        if: steps.detect_backend.outputs.found == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install backend dependencies
+        if: steps.detect_backend.outputs.found == 'true'
+        working-directory: ${{ steps.detect_backend.outputs.backend_dir }}
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f "requirements.txt" ]; then
+            pip install -r requirements.txt
+          elif [ -f "pyproject.toml" ]; then
+            pip install .
+          else
+            pip install fastapi uvicorn sqlalchemy pydantic pydantic-settings python-multipart passlib[bcrypt] python-jose[cryptography]
+          fi
+
+      - name: Compile backend Python files
+        if: steps.detect_backend.outputs.found == 'true'
+        run: python -m compileall ${{ steps.detect_backend.outputs.backend_dir }}
+
+      - name: Import FastAPI app
+        if: steps.detect_backend.outputs.found == 'true'
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          if [ -f "${{ steps.detect_backend.outputs.backend_dir }}/app/main.py" ]; then
+            python - <<'PY'
+          import importlib
+          module = importlib.import_module("backend.app.main")
+          app = getattr(module, "app", None)
+          if app is None:
+              raise RuntimeError("backend.app.main does not expose `app`")
+          print("FastAPI app import OK")
+          PY
+          else
+            echo "No backend/app/main.py found. Skipping app import check."
+          fi
+
+      - name: Skip backend check
+        if: steps.detect_backend.outputs.found != 'true'
+        run: echo "No backend directory found. Skipping backend check."
