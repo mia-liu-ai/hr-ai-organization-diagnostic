@@ -144,7 +144,6 @@ const ratingTypeOptions = [
 ];
 
 const tabs: Array<{ key: Tab; label: string; icon: ReactNode }> = [
-  { key: 'project', label: '项目创建', icon: <ClipboardList size={18} /> },
   { key: 'questionnaire', label: '问卷设计', icon: <BrainCircuit size={18} /> },
   { key: 'employees', label: '员工管理', icon: <Users size={18} /> },
   { key: 'relationships', label: '评价关系', icon: <Link2 size={18} /> },
@@ -317,6 +316,23 @@ const conditionTypeOptions = [
   'custom',
 ];
 const riskLevelOptions = ['low', 'medium', 'high', 'critical'];
+const conditionTypeLabels: Record<string, string> = {
+  self_other_gap: '自评与他评差距',
+  manager_subordinate_gap: '上下级认知差距',
+  peer_collaboration_gap: '同级协作差距',
+  high_variance: '评分分歧较高',
+  low_dimension_score: '维度评分偏低',
+  feedback_theme_frequency: '反馈主题高频出现',
+  ai_adoption_gap: 'AI 采用差距',
+  governance_risk: '治理风险',
+  custom: '自定义规则',
+};
+const riskLevelLabels: Record<string, string> = {
+  low: '低风险',
+  medium: '中等风险',
+  high: '高风险',
+  critical: '关键风险',
+};
 const reportTypeOptions = [
   '组织诊断报告',
   'AI 转型成熟度报告',
@@ -363,6 +379,39 @@ function displayStatus(value: string | undefined) {
 
 function displayReportType(value: string | undefined) {
   return value ? reportTypeLabels[value] || value : '诊断报告';
+}
+
+function displayRiskLevel(value: string | undefined) {
+  return value ? riskLevelLabels[value] || value : '未评估';
+}
+
+function displayConditionType(value: string | undefined) {
+  return value ? conditionTypeLabels[value] || value : '规则条件';
+}
+
+function displayFeedbackCategory(value: string | undefined) {
+  return value
+    ? feedbackCategories.find((item) => item.value === value)?.label || value
+    : '反馈';
+}
+
+function displayPriority(value: string | undefined) {
+  const labels: Record<string, string> = {
+    low: '低',
+    normal: '普通',
+    high: '高',
+  };
+  return value ? labels[value] || value : '普通';
+}
+
+function displayTargetType(value: string | undefined) {
+  const labels: Record<string, string> = {
+    organization: '组织层面',
+    employee: '员工层面',
+    manager: '管理者层面',
+    team: '团队层面',
+  };
+  return value ? labels[value] || value : '未设置对象';
 }
 
 const blankDiagnosis: DiagnosisHypothesis = {
@@ -579,7 +628,7 @@ function parseEmployeeRows(text: string) {
 
 export default function App() {
   const [activeModule, setActiveModule] = useState<Module>('home');
-  const [activeTab, setActiveTab] = useState<Tab>('project');
+  const [activeTab, setActiveTab] = useState<Tab>('questionnaire');
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [loginForm, setLoginForm] = useState({
     username: 'admin',
@@ -892,7 +941,7 @@ export default function App() {
       setActiveModule('login');
       return;
     }
-    const bossModules: Module[] = [
+    const leadershipModules: Module[] = [
       'executiveDashboard',
       'organizationDiagnosis',
       'talentOverview',
@@ -927,7 +976,7 @@ export default function App() {
       'myGrowthReport',
       'dashboard',
     ];
-    if (false && !bossModules.includes(module)) {
+    if (false && !leadershipModules.includes(module)) {
       setNotice('组织管理员视图默认只展示汇总和决策信息。');
       setActiveModule('executiveDashboard');
       void loadExecutiveDashboard();
@@ -3247,7 +3296,7 @@ export default function App() {
   }
 
   function requireProject(children: ReactNode) {
-    if (!projectId) {
+    if (!selectedProjectId) {
       return (
         <div className="rounded-2xl border border-dashed border-sky-200 bg-sky-50/70 p-8 text-center">
           <p className="text-base font-bold text-slate-950">
@@ -3789,7 +3838,9 @@ export default function App() {
                       {project.name}
                     </td>
                     <td className="px-3 py-3">{project.project_type}</td>
-                    <td className="px-3 py-3">{project.status}</td>
+                    <td className="px-3 py-3">
+                      {displayStatus(project.status)}
+                    </td>
                     <td className="px-3 py-3">{project.start_date || '-'}</td>
                     <td className="px-3 py-3">{project.end_date || '-'}</td>
                     <td className="px-3 py-3">
@@ -4410,7 +4461,7 @@ export default function App() {
           >
             <p className="text-sm leading-6 text-slate-600">
               诊断会把当前项目的诊断假设、组织诊断维度、人才模型、问卷统计、360数据、员工反馈、报告草案放到同一个讨论桌上。
-              MVP 版本先输出结构化共识草案；后续会把每次诊断会保存为带 project_id 的数据库记录，并接入真实 AI 多专家生成。
+              当前版本先输出结构化共识草案；后续会把每次诊断会保存到当前项目下，并接入真实 AI 多专家生成。
             </p>
             <div className="mt-4 grid gap-3 md:grid-cols-3">
               {experts.map(([name, body]) => (
@@ -5764,7 +5815,7 @@ export default function App() {
                         <span
                           className={`rounded-lg px-2 py-1 text-xs font-bold ${cluster.risk_level === 'high' || cluster.risk_level === 'critical' ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'}`}
                         >
-                          {cluster.risk_level}
+                          {displayRiskLevel(cluster.risk_level)}
                         </span>
                       </div>
                       <p className="mt-2 text-sm leading-6 text-slate-700">
@@ -5803,7 +5854,9 @@ export default function App() {
                           {item.title}
                         </p>
                         <p className="mt-1 text-xs text-slate-500">
-                          {item.category} · {item.priority} · {item.status}
+                          {displayFeedbackCategory(item.category)} ·{' '}
+                          {displayPriority(item.priority)} ·{' '}
+                          {displayStatus(item.status)}
                           {isAdmin
                             ? ` · ${item.anonymous ? '匿名' : item.employee_name || item.username || '未绑定员工'}`
                             : ''}
@@ -6072,7 +6125,7 @@ export default function App() {
                         {item.target_scope || '未命名诊断'}
                       </p>
                       <p className="mt-1 text-xs text-slate-500">
-                        {item.company_stage} · {item.status} ·{' '}
+                        {item.company_stage} · {displayStatus(item.status)} ·{' '}
                         {item.updated_at || item.created_at}
                       </p>
                       <p className="mt-2 line-clamp-2 text-slate-600">
@@ -6382,8 +6435,10 @@ export default function App() {
                     >
                       <p className="font-bold text-slate-950">{model.name}</p>
                       <p className="mt-1 text-xs text-slate-500">
-                        {model.status} ·{' '}
-                        {model.dimensions.length || model.dimension_count || 0}{' '}
+                        {displayStatus(model.status)} ·{' '}
+                        {(model.dimensions ?? []).length ||
+                          model.dimension_count ||
+                          0}{' '}
                         个维度
                       </p>
                       <p className="mt-2 line-clamp-2 text-slate-600">
@@ -6759,7 +6814,7 @@ export default function App() {
                     <option value="">不选择</option>
                     {availableModels.map((model) => (
                       <option key={model.id} value={model.id}>
-                        {model.name} · {model.status}
+                        {model.name} · {displayStatus(model.status)}
                       </option>
                     ))}
                   </select>
@@ -6834,7 +6889,7 @@ export default function App() {
                     >
                       {conditionTypeOptions.map((option) => (
                         <option key={option} value={option}>
-                          {option}
+                          {conditionTypeLabels[option] || option}
                         </option>
                       ))}
                     </select>
@@ -6853,7 +6908,7 @@ export default function App() {
                     >
                       {riskLevelOptions.map((option) => (
                         <option key={option} value={option}>
-                          {option}
+                          {riskLevelLabels[option] || option}
                         </option>
                       ))}
                     </select>
@@ -6946,14 +7001,14 @@ export default function App() {
                       <span
                         className={`rounded-lg px-2 py-1 text-xs font-bold ${rule.risk_level === 'high' || rule.risk_level === 'critical' ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'}`}
                       >
-                        {rule.risk_level}
+                        {displayRiskLevel(rule.risk_level)}
                       </span>
                     </div>
                     <p className="mt-2 text-sm leading-6 text-slate-700">
                       {rule.diagnosis_text}
                     </p>
                     <p className="mt-2 text-xs text-slate-500">
-                      条件：{rule.condition_type} · 证据：
+                      条件：{displayConditionType(rule.condition_type)} · 证据：
                       {rule.evidence_sources.join('、') || '未填'}
                     </p>
                     <p className="mt-2 text-sm font-semibold text-slate-700">
@@ -7126,7 +7181,8 @@ export default function App() {
                           className="rounded-lg border border-slate-200 bg-slate-50 p-3"
                         >
                           <p className="font-bold text-slate-950">
-                            {cluster.theme} · {cluster.risk_level}
+                            {cluster.theme} ·{' '}
+                            {displayRiskLevel(cluster.risk_level)}
                           </p>
                           <p className="mt-1 text-sm leading-6 text-slate-600">
                             {cluster.summary}
@@ -7154,7 +7210,7 @@ export default function App() {
                           className="rounded-lg border border-slate-200 bg-white p-3"
                         >
                           <p className="font-bold text-slate-950">
-                            {risk.title} · {risk.risk_level}
+                            {risk.title} · {displayRiskLevel(risk.risk_level)}
                           </p>
                           <p className="mt-1 text-sm leading-6 text-slate-600">
                             {risk.description}
@@ -7213,7 +7269,7 @@ export default function App() {
                           className="rounded-lg border border-slate-200 bg-slate-50 p-3"
                         >
                           <p className="font-bold text-slate-950">
-                            {item.title} · {item.risk_level}
+                            {item.title} · {displayRiskLevel(item.risk_level)}
                           </p>
                           <p className="mt-1 text-sm leading-6 text-slate-600">
                             建议管理员下一步：{item.suggested_action}
@@ -7497,7 +7553,8 @@ export default function App() {
                             {plan.description}
                           </p>
                           <p className="mt-2 text-xs text-slate-500">
-                            {plan.status} · {plan.target_type}
+                            {displayStatus(plan.status)} ·{' '}
+                            {displayTargetType(plan.target_type)}
                           </p>
                         </div>
                       ))}
@@ -8182,7 +8239,7 @@ export default function App() {
         </Panel>
         <Panel title="证据收集方案" eyebrow="证据收集方案">
           <p className="text-sm leading-6 text-slate-600">
-            问卷不是独立功能，而是证据收集方案的一部分。一个问卷可以同时包含组织诊断问题、人才/胜任力模型问题、360评审问题和开放反馈问题；生成后统一进入问卷中心，按当前 project_id 隔离管理。
+            问卷不是独立功能，而是证据收集方案的一部分。一个问卷可以同时包含组织诊断问题、人才/胜任力模型问题、360评审问题和开放反馈问题；生成后统一进入问卷中心，按当前项目隔离管理。
           </p>
         </Panel>
         <Panel
@@ -9620,7 +9677,7 @@ export default function App() {
             <Activity size={22} />
             <div className="min-w-0">
               <p className="truncate text-sm font-black">组织发展诊断平台</p>
-              <p className="text-xs text-slate-300">360评审 Agent</p>
+              <p className="text-xs text-slate-300">360评审助手</p>
             </div>
           </div>
           <nav className="mt-5 grid gap-2">
@@ -9629,7 +9686,7 @@ export default function App() {
               onClick={() => setActiveModule('review360')}
             >
               <BrainCircuit size={18} />
-              360评审 Agent
+              360评审助手
             </button>
             <button
               className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-slate-600 hover:bg-slate-100 hover:text-slate-950"
