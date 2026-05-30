@@ -56,7 +56,7 @@ def get_allowed_origins() -> list[str]:
     return origins or DEFAULT_ALLOWED_ORIGINS
 
 
-app = FastAPI(title="HR 360 Review Intelligence Agent", version="0.1.0")
+app = FastAPI(title="AI Organization Diagnostic Platform", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_allowed_origins(),
@@ -91,10 +91,13 @@ class QuestionPayload(BaseModel):
     text: str
     behavior_anchor: str = ""
     question_type: str = "rating"
+    source_type: str = "manual"
     relation_scope: str = "all"
+    applicable_relationships: list[str] = Field(default_factory=list)
     rating_type: str = "score_1_5"
     open_followup: str = ""
     weight: float = 1.0
+    required: bool = True
     hypothesis_id: int | None = None
     model_id: int | None = None
     sort_order: int = 0
@@ -152,7 +155,7 @@ class ResponsePayload(BaseModel):
 
 class ReportUpdatePayload(BaseModel):
     content: str
-    editor: str = "HR"
+    editor: str = "管理员"
 
 
 class Questionnaire360GeneratePayload(BaseModel):
@@ -171,13 +174,13 @@ class UserCreatePayload(BaseModel):
     username: str = Field(min_length=1)
     loginCode: str = ""
     credential: str = Field(default="", alias=CREDENTIAL_FIELD)
-    role: Literal["admin", "boss", "hr", "employee"] = "employee"
+    role: Literal["admin", "employee"] = "employee"
     employee_id: int | None = None
     status: Literal["active", "disabled"] = "active"
 
 
 class UserUpdatePayload(BaseModel):
-    role: Literal["admin", "boss", "hr", "employee"] | None = None
+    role: Literal["admin", "employee"] | None = None
     employee_id: int | None = None
     status: Literal["active", "disabled"] | None = None
 
@@ -208,7 +211,7 @@ class DiagnosisHypothesisPayload(BaseModel):
     hr_core_judgment: str = ""
     target_talent: str = ""
     focus_issues: list[str] = Field(default_factory=list)
-    constraints: str = "不用于淘汰，不直接关联薪酬，不展示少于3人的评价群体原始评论，所有报告需要 HR 人工确认。"
+    constraints: str = "不用于淘汰，不直接关联薪酬，不展示少于3人的评价群体原始评论，所有报告需要管理员确认。"
     expected_outputs: list[str] = Field(default_factory=list)
     ai_extracted_hypotheses: list[dict[str, Any]] = Field(default_factory=list)
     status: Literal["draft", "generated", "confirmed"] = "draft"
@@ -234,6 +237,14 @@ class TalentModelPayload(BaseModel):
     template: str = "AI-native Manager Model"
     name: str = Field(min_length=1)
     description: str = ""
+    talent_type: str = ""
+    hard_skills: str = ""
+    soft_qualities: str = ""
+    behavioral_indicators: str = ""
+    interview_focus: str = ""
+    risk_signals: str = ""
+    interview_questions: str = ""
+    rationale: str = ""
     source_type: str = "ai_generated"
     status: Literal["draft", "confirmed"] = "draft"
     dimensions: list[TalentDimensionPayload] = Field(default_factory=list)
@@ -334,11 +345,41 @@ class ActionPlanPayload(BaseModel):
     ai_generated: bool = False
 
 
+class ExpertCouncilSessionPayload(BaseModel):
+    input_snapshot: dict[str, Any] = Field(default_factory=dict)
+    output: dict[str, Any] = Field(default_factory=dict)
+    confidence: float = 0
+    risk_level: Literal["low", "medium", "high", "critical"] = "medium"
+    status: Literal["draft", "confirmed"] = "draft"
+
+
 class OrganizationDiagnosisResponseItem(BaseModel):
     dimension: str
     question_key: str
     score: int = Field(ge=1, le=5)
     comment: str = ""
+
+
+class OrganizationDiagnosisQuestionItem(BaseModel):
+    key: str
+    text: str
+    score_min: int = 1
+    score_max: int = 5
+
+
+class OrganizationDiagnosisDimensionPayload(BaseModel):
+    key: str
+    label: str
+    description: str = ""
+    questions: list[OrganizationDiagnosisQuestionItem] = Field(default_factory=list)
+    score: float = 3
+    comments: str = ""
+    evidence: str = ""
+    sort_order: int = 0
+
+
+class OrganizationDiagnosisSavePayload(BaseModel):
+    dimensions: list[OrganizationDiagnosisDimensionPayload]
 
 
 class OrganizationDiagnosisResponsePayload(BaseModel):
@@ -350,6 +391,25 @@ class SurveyPayload(BaseModel):
     title: str = Field(min_length=1)
     description: str = ""
     status: Literal["draft", "active", "closed"] = "draft"
+
+
+class SurveyQuestionPayload(BaseModel):
+    source_type: str = "manual"
+    question_type: str = "rating"
+    dimension_key: str = ""
+    dimension_label: str = ""
+    question_text: str = Field(min_length=1)
+    options: list[str] = Field(default_factory=list)
+    required: bool = True
+    sort_order: int = 0
+
+
+class SurveyGeneratePayload(BaseModel):
+    title: str = "组织诊断与胜任力模型综合问卷"
+    description: str = ""
+    source_mode: Literal["org_diagnosis", "talent_model", "combined"] = "combined"
+    status: Literal["draft", "active"] = "active"
+    model_id: int | None = None
 
 
 class SurveyResponsePayload(BaseModel):
@@ -501,14 +561,20 @@ def fetch_one_or_404(conn: Any, sql: str, params: tuple[Any, ...], label: str) -
     return as_dict(row)
 
 
+def normalize_role(role: str | None) -> str:
+    return "admin" if role in {"admin", "boss", "hr"} else "employee"
+
+
 def public_user(row: Any) -> dict[str, Any]:
     user = as_dict(row)
     user.pop("password_hash", None)
+    if user:
+        user["role"] = normalize_role(user.get("role"))
     return user
 
 
 def role_is_hr(role: str | None) -> bool:
-    return role in {"admin", "hr"}
+    return normalize_role(role) == "admin"
 
 
 def serialize_project(row: Any) -> dict[str, Any]:
@@ -549,6 +615,7 @@ def current_user(authorization: str | None) -> dict[str, Any]:
         if not row:
             raise HTTPException(status_code=401, detail="session expired or invalid")
         user = as_dict(row)
+        user["role"] = normalize_role(user.get("role"))
         user[SESSION_FIELD] = session_value
         return user
 
@@ -566,8 +633,8 @@ def require_hr_user(authorization: str | None) -> dict[str, Any]:
 
 def require_boss_or_hr_user(authorization: str | None) -> dict[str, Any]:
     user = current_user(authorization)
-    if user["role"] not in {"boss", "hr", "admin"}:
-        raise HTTPException(status_code=403, detail="boss or hr only")
+    if normalize_role(user["role"]) != "admin":
+        raise HTTPException(status_code=403, detail="admin only")
     return user
 
 
@@ -629,7 +696,7 @@ def record_edit(
     entity_id: int,
     before: Any,
     after: Any,
-    editor: str = "HR",
+    editor: str = "管理员",
 ) -> None:
     conn.execute(
         """
@@ -824,11 +891,17 @@ def fetch_questionnaire(conn: Any, project_id: int) -> dict[str, Any]:
             "SELECT * FROM questions WHERE dimension_id = ? ORDER BY sort_order, id",
             (dimension["id"],),
         ).fetchall()
-        dimension["questions"] = [as_dict(row) for row in rows]
+        questions = []
+        for row in rows:
+            question = as_dict(row)
+            question["applicable_relationships"] = loads_json(question.get("applicable_relationships"), [])
+            question["required"] = bool(question.get("required", 1))
+            questions.append(question)
+        dimension["questions"] = questions
     return {"dimensions": dimensions}
 
 
-def save_questionnaire(conn: Any, project_id: int, dimensions: list[dict[str, Any]], editor: str = "HR") -> dict[str, Any]:
+def save_questionnaire(conn: Any, project_id: int, dimensions: list[dict[str, Any]], editor: str = "管理员") -> dict[str, Any]:
     before = fetch_questionnaire(conn, project_id)
     conn.execute("DELETE FROM dimensions WHERE project_id = ?", (project_id,))
     conn.execute("DELETE FROM competencies WHERE project_id = ?", (project_id,))
@@ -863,9 +936,10 @@ def save_questionnaire(conn: Any, project_id: int, dimensions: list[dict[str, An
             conn.execute(
                 """
                 INSERT INTO questions
-                    (project_id, competency_id, dimension_id, hypothesis_id, model_id, content, text,
-                     behavior_anchor, question_type, relation_scope, rating_type, open_followup, weight, sort_order)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (project_id, competency_id, dimension_id, hypothesis_id, model_id, source_type, content, text,
+                     behavior_anchor, question_type, relation_scope, applicable_relationships, rating_type,
+                     open_followup, weight, required, sort_order)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     project_id,
@@ -873,14 +947,17 @@ def save_questionnaire(conn: Any, project_id: int, dimensions: list[dict[str, An
                     dimension_id,
                     question.get("hypothesis_id"),
                     question.get("model_id"),
+                    question.get("source_type", "manual"),
                     question["text"],
                     question["text"],
                     question.get("behavior_anchor", ""),
                     question.get("question_type", "rating"),
                     question.get("relation_scope", "all"),
+                    dumps(question.get("applicable_relationships", [])),
                     question.get("rating_type", "score_1_5"),
                     question.get("open_followup", ""),
                     question.get("weight", 1.0),
+                    int(question.get("required", True)),
                     question.get("sort_order", q_index),
                 ),
             )
@@ -1310,6 +1387,166 @@ def serialize_talent_profile(row: Any) -> dict[str, Any]:
     return item
 
 
+def serialize_survey_question(row: Any) -> dict[str, Any]:
+    item = as_dict(row)
+    item["options"] = loads_json(item.get("options_json"), [])
+    item["required"] = bool(item.get("required", 1))
+    item.pop("options_json", None)
+    return item
+
+
+def survey_questions_for_sources(conn: Any, project_id: int, source_mode: str, model_id: int | None = None) -> list[dict[str, Any]]:
+    questions: list[dict[str, Any]] = []
+    if source_mode in {"org_diagnosis", "combined"}:
+        for dim_index, dimension in enumerate(fetch_org_diagnosis_dimensions(conn, project_id)):
+            for q_index, question in enumerate(dimension.get("questions", [])):
+                questions.append(
+                    {
+                        "source_type": "org_diagnosis",
+                        "question_type": "rating",
+                        "dimension_key": dimension.get("key", ""),
+                        "dimension_label": dimension.get("label", ""),
+                        "question_text": question.get("text", ""),
+                        "options": ["1", "2", "3", "4", "5"],
+                        "required": True,
+                        "sort_order": len(questions) + q_index + dim_index,
+                    }
+                )
+    if source_mode in {"talent_model", "combined"}:
+        model_clause = "AND tm.id = ?" if model_id else ""
+        params: tuple[Any, ...] = (project_id, model_id) if model_id else (project_id,)
+        rows = conn.execute(
+            f"""
+            SELECT td.*, tm.id AS model_id, tm.name AS model_name
+            FROM talent_dimensions td
+            JOIN talent_models tm ON tm.id = td.model_id
+            WHERE tm.project_id = ? {model_clause}
+            ORDER BY tm.updated_at DESC, tm.id DESC, td.id
+            """,
+            params,
+        ).fetchall()
+        for row in rows:
+            dim = serialize_talent_dimension(row)
+            sample_questions = dim.get("sample_rating_questions") or []
+            if not sample_questions:
+                sample_questions = [f"请评价该能力维度的可观察行为表现：{dim['name']}。"]
+            for question in sample_questions:
+                questions.append(
+                    {
+                        "source_type": "talent_model",
+                        "question_type": "rating",
+                        "dimension_key": f"talent_dimension_{row['id']}",
+                        "dimension_label": dim["name"],
+                        "question_text": question,
+                        "options": ["1", "2", "3", "4", "5"],
+                        "required": True,
+                        "sort_order": len(questions),
+                    }
+                )
+            for question in dim.get("sample_open_questions") or []:
+                questions.append(
+                    {
+                        "source_type": "talent_model",
+                        "question_type": "open_feedback",
+                        "dimension_key": f"talent_dimension_{row['id']}",
+                        "dimension_label": dim["name"],
+                        "question_text": question,
+                        "options": [],
+                        "required": False,
+                        "sort_order": len(questions),
+                    }
+                )
+    if source_mode == "combined":
+        questions.extend(
+            [
+                {
+                    "source_type": "review360",
+                    "question_type": "behavior_observation",
+                    "dimension_key": "review360_collaboration",
+                    "dimension_label": "360 评审",
+                    "question_text": "从多视角看，被评价对象在跨团队协作、信息同步和承诺兑现方面表现如何？",
+                    "options": ["1", "2", "3", "4", "5"],
+                    "required": True,
+                    "sort_order": len(questions),
+                },
+                {
+                    "source_type": "open_feedback",
+                    "question_type": "open_feedback",
+                    "dimension_key": "employee_voice",
+                    "dimension_label": "开放反馈",
+                    "question_text": "如果希望团队减少无效沟通、重复劳动或目标不清晰，你最希望优先改进什么？",
+                    "options": [],
+                    "required": False,
+                    "sort_order": len(questions) + 1,
+                },
+            ]
+        )
+    return [question for question in questions if question.get("question_text")]
+
+
+def create_survey_with_questions(
+    conn: Any,
+    project_id: int,
+    title: str,
+    description: str,
+    status: str,
+    created_by: int | None,
+    questions: list[dict[str, Any]],
+    survey_type: str = "review_360",
+) -> dict[str, Any]:
+    cur = conn.execute(
+        """
+        INSERT INTO surveys (project_id, survey_type, title, description, status, created_by)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (project_id, survey_type, title, description, status, created_by),
+    )
+    survey_id = int(cur.lastrowid)
+    for index, question in enumerate(questions):
+        conn.execute(
+            """
+            INSERT INTO survey_questions
+                (project_id, survey_id, source_type, question_type, dimension_key, dimension_label,
+                 question_text, options_json, required, sort_order)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                project_id,
+                survey_id,
+                question.get("source_type", "manual"),
+                question.get("question_type", "rating"),
+                question.get("dimension_key", ""),
+                question.get("dimension_label", ""),
+                question["question_text"],
+                dumps(question.get("options", [])),
+                int(question.get("required", True)),
+                question.get("sort_order", index),
+            ),
+        )
+    return serialize_survey_detail(conn, project_id, survey_id)
+
+
+def serialize_survey_detail(conn: Any, project_id: int, survey_id: int) -> dict[str, Any]:
+    survey = fetch_one_or_404(
+        conn,
+        "SELECT * FROM surveys WHERE project_id = ? AND id = ?",
+        (project_id, survey_id),
+        "survey",
+    )
+    question_rows = conn.execute(
+        "SELECT * FROM survey_questions WHERE project_id = ? AND survey_id = ? ORDER BY sort_order, id",
+        (project_id, survey_id),
+    ).fetchall()
+    response_count = conn.execute(
+        "SELECT COUNT(*) AS count FROM survey_responses WHERE project_id = ? AND survey_id = ?",
+        (project_id, survey_id),
+    ).fetchone()["count"]
+    survey["questions"] = [serialize_survey_question(row) for row in question_rows]
+    survey["response_count"] = response_count
+    survey["source_types"] = sorted({question["source_type"] for question in survey["questions"]})
+    return survey
+
+
 def build_survey_progress(conn: Any, project_id: int) -> list[dict[str, Any]]:
     employee_count = conn.execute("SELECT COUNT(*) AS count FROM employees WHERE project_id = ?", (project_id,)).fetchone()["count"]
     rows = conn.execute("SELECT * FROM surveys WHERE project_id = ? ORDER BY created_at DESC, id DESC", (project_id,)).fetchall()
@@ -1320,6 +1557,7 @@ def build_survey_progress(conn: Any, project_id: int) -> list[dict[str, Any]]:
         progress.append(
             {
                 **as_dict(row),
+                "question_count": conn.execute("SELECT COUNT(*) AS count FROM survey_questions WHERE survey_id = ?", (row["id"],)).fetchone()["count"],
                 "submitted_count": submitted,
                 "pending_count": max(total - submitted, 0),
                 "completion_rate": round(submitted / total * 100, 1) if total else 0,
@@ -1721,6 +1959,25 @@ def serialize_talent_model(conn: Any, row: Any) -> dict[str, Any]:
         (item["id"],),
     ).fetchall()
     item["dimensions"] = [serialize_talent_dimension(dimension) for dimension in dimensions]
+    item["dimension_count"] = len(item["dimensions"])
+    item["talent_type"] = item.get("talent_type") or item.get("template") or ""
+    item["hard_skills"] = item.get("hard_skills") or "\n".join(d["name"] for d in item["dimensions"])
+    item["soft_qualities"] = item.get("soft_qualities") or item.get("description", "")
+    item["behavioral_indicators"] = item.get("behavioral_indicators") or "\n".join(
+        filter(None, [d.get("high_behavior", "") for d in item["dimensions"]])
+    )
+    item["interview_focus"] = item.get("interview_focus") or "\n".join(
+        filter(None, [d.get("description", "") for d in item["dimensions"]])
+    )
+    item["risk_signals"] = item.get("risk_signals") or "\n".join(
+        filter(None, [d.get("low_behavior", "") for d in item["dimensions"]])
+    )
+    item["interview_questions"] = item.get("interview_questions") or "\n".join(
+        question
+        for d in item["dimensions"]
+        for question in d.get("sample_open_questions", [])
+    )
+    item["rationale"] = item.get("rationale") or item.get("description", "")
     return item
 
 
@@ -1827,11 +2084,14 @@ def save_model_questionnaire(
             {
                 "text": question["content"],
                 "behavior_anchor": question.get("open_followup", ""),
+                "source_type": "ai_model",
                 "question_type": question.get("question_type", "rating"),
                 "relation_scope": question.get("relation_scope", "上级,同级,下级,协作方"),
+                "applicable_relationships": payload.relation_types,
                 "rating_type": question.get("rating_type", "1-5"),
                 "open_followup": question.get("open_followup", ""),
                 "weight": question.get("weight", 1.0),
+                "required": True,
                 "hypothesis_id": payload.hypothesis_id,
                 "model_id": payload.model_id,
                 "sort_order": index,
@@ -1850,14 +2110,41 @@ def save_model_questionnaire(
                     "dimension_id": dimension["id"],
                     "dimension_name": dimension["name"],
                     "content": question.get("content") or question.get("text"),
+                    "source_type": question.get("source_type", "ai_model"),
                     "question_type": question.get("question_type", "rating"),
                     "relation_scope": question.get("relation_scope", ""),
+                    "applicable_relationships": question.get("applicable_relationships", []),
                     "rating_type": question.get("rating_type", "1-5"),
                     "open_followup": question.get("open_followup", ""),
                     "weight": question.get("weight", 1.0),
+                    "required": bool(question.get("required", True)),
+                    "order": question.get("sort_order", 0),
                 }
             )
     questionnaire["questions"] = saved_questions
+    survey_questions = [
+        {
+            "source_type": question.get("source_type", "ai_model"),
+            "question_type": question.get("question_type", "rating"),
+            "dimension_key": f"dimension_{question.get('dimension_id')}",
+            "dimension_label": question.get("dimension_name", ""),
+            "question_text": question.get("content", ""),
+            "options": ["1", "2", "3", "4", "5"] if question.get("question_type") != "open_feedback" else [],
+            "required": question.get("required", True),
+            "sort_order": question.get("order", 0),
+        }
+        for question in saved_questions
+    ]
+    questionnaire["survey"] = create_survey_with_questions(
+        conn,
+        payload.project_id,
+        f"AI diagnosis questionnaire - model {payload.model_id}",
+        "Generated from diagnosis hypothesis and talent model.",
+        "active",
+        None,
+        survey_questions,
+        "review_360",
+    )
     return questionnaire
 
 
@@ -1866,6 +2153,52 @@ def serialize_diagnosis_rule(row: Any) -> dict[str, Any]:
     item["condition_json"] = loads_json(item.get("condition_json"), {})
     item["evidence_sources"] = loads_json(item.get("evidence_sources"), [])
     return item
+
+
+def serialize_org_diagnosis_dimension(row: Any) -> dict[str, Any]:
+    item = as_dict(row)
+    questions = loads_json(item.get("questions_json"), [])
+    item["key"] = item.pop("dimension_key")
+    item["questions"] = questions if isinstance(questions, list) else []
+    item.pop("questions_json", None)
+    return item
+
+
+def default_org_diagnosis_dimensions(project_id: int) -> list[dict[str, Any]]:
+    return [
+        {
+            **dimension,
+            "project_id": project_id,
+            "score": 3,
+            "comments": "",
+            "evidence": "",
+            "sort_order": index,
+            "questions": [
+                {
+                    "key": f"{dimension['key']}_{question_index + 1}",
+                    "text": text,
+                    "score_min": 1,
+                    "score_max": 5,
+                }
+                for question_index, text in enumerate(dimension["questions"])
+            ],
+        }
+        for index, dimension in enumerate(ORG_DIAGNOSIS_DIMENSIONS)
+    ]
+
+
+def fetch_org_diagnosis_dimensions(conn: Any, project_id: int) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT * FROM organization_diagnosis_dimensions
+        WHERE project_id = ?
+        ORDER BY sort_order, id
+        """,
+        (project_id,),
+    ).fetchall()
+    if rows:
+        return [serialize_org_diagnosis_dimension(row) for row in rows]
+    return default_org_diagnosis_dimensions(project_id)
 
 
 def fallback_diagnosis_rules() -> list[dict[str, Any]]:
@@ -2204,6 +2537,15 @@ def serialize_action_plan(row: Any) -> dict[str, Any]:
     return item
 
 
+def serialize_expert_council_session(row: Any) -> dict[str, Any]:
+    item = as_dict(row)
+    item["input_snapshot"] = loads_json(item.get("input_snapshot_json"), {})
+    item["output"] = loads_json(item.get("output_json"), {})
+    item.pop("input_snapshot_json", None)
+    item.pop("output_json", None)
+    return item
+
+
 def build_organization_dashboard(conn: Any, project_id: int) -> dict[str, Any]:
     analytics = build_analytics(conn, project_id)
     task_row = conn.execute(
@@ -2341,7 +2683,7 @@ def root() -> dict[str, str]:
     return {
         "name": "hr-ai-consulting",
         "status": "ok",
-        "message": "HR AI Consulting backend is running",
+        "message": "AI Organization Diagnostic backend is running",
         "docs": "/docs",
         "health": "/api/health",
     }
@@ -2356,6 +2698,7 @@ def health() -> dict[str, str]:
 def get_ai_settings() -> dict[str, Any]:
     settings = get_settings()
     return {
+        "provider": settings["provider"],
         "base_url": settings["base_url"],
         "model": settings["model"],
         "hasModelCredential": bool(settings["api_key"]),
@@ -2769,6 +3112,18 @@ def confirm_diagnosis_hypothesis(
         return serialize_diagnosis(row)
 
 
+@app.delete("/api/diagnosis/hypotheses/{hypothesis_id}")
+def delete_diagnosis_hypothesis(
+    hypothesis_id: int,
+    authorization: str | None = Header(default=None),
+) -> dict[str, bool]:
+    require_admin_user(authorization)
+    with get_connection() as conn:
+        fetch_one_or_404(conn, "SELECT * FROM diagnosis_hypotheses WHERE id = ?", (hypothesis_id,), "diagnosis hypothesis")
+        conn.execute("DELETE FROM diagnosis_hypotheses WHERE id = ?", (hypothesis_id,))
+    return {"deleted": True}
+
+
 @app.post("/api/talent/models/generate")
 def generate_talent_model(
     payload: TalentModelGeneratePayload,
@@ -2826,10 +3181,28 @@ def create_talent_model(
         cur = conn.execute(
             """
             INSERT INTO talent_models
-                (project_id, hypothesis_id, name, description, source_type, created_by, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (project_id, hypothesis_id, name, description, talent_type, hard_skills, soft_qualities,
+                 behavioral_indicators, interview_focus, risk_signals, interview_questions, rationale,
+                 source_type, created_by, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (payload.project_id, payload.hypothesis_id, payload.name, payload.description, payload.source_type, user["id"], payload.status),
+            (
+                payload.project_id,
+                payload.hypothesis_id,
+                payload.name,
+                payload.description,
+                payload.talent_type,
+                payload.hard_skills,
+                payload.soft_qualities,
+                payload.behavioral_indicators,
+                payload.interview_focus,
+                payload.risk_signals,
+                payload.interview_questions,
+                payload.rationale,
+                payload.source_type,
+                user["id"],
+                payload.status,
+            ),
         )
         model_id = int(cur.lastrowid)
         for dimension in payload.dimensions:
@@ -2896,10 +3269,28 @@ def update_talent_model(
             """
             UPDATE talent_models
             SET project_id = ?, hypothesis_id = ?, name = ?, description = ?,
+                talent_type = ?, hard_skills = ?, soft_qualities = ?, behavioral_indicators = ?,
+                interview_focus = ?, risk_signals = ?, interview_questions = ?, rationale = ?,
                 source_type = ?, status = ?, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
             """,
-            (payload.project_id, payload.hypothesis_id, payload.name, payload.description, payload.source_type, payload.status, model_id),
+            (
+                payload.project_id,
+                payload.hypothesis_id,
+                payload.name,
+                payload.description,
+                payload.talent_type,
+                payload.hard_skills,
+                payload.soft_qualities,
+                payload.behavioral_indicators,
+                payload.interview_focus,
+                payload.risk_signals,
+                payload.interview_questions,
+                payload.rationale,
+                payload.source_type,
+                payload.status,
+                model_id,
+            ),
         )
         conn.execute("DELETE FROM talent_dimensions WHERE model_id = ?", (model_id,))
         for dimension in payload.dimensions:
@@ -2935,6 +3326,16 @@ def confirm_talent_model(model_id: int, authorization: str | None = Header(defau
         fetch_one_or_404(conn, "SELECT * FROM talent_models WHERE id = ?", (model_id,), "talent model")
         conn.execute("UPDATE talent_models SET status = 'confirmed', updated_at = CURRENT_TIMESTAMP WHERE id = ?", (model_id,))
         return fetch_talent_model(conn, model_id)
+
+
+@app.delete("/api/talent/models/{model_id}")
+def delete_talent_model(model_id: int, authorization: str | None = Header(default=None)) -> dict[str, bool]:
+    require_admin_user(authorization)
+    with get_connection() as conn:
+        fetch_one_or_404(conn, "SELECT * FROM talent_models WHERE id = ?", (model_id,), "talent model")
+        conn.execute("DELETE FROM talent_dimensions WHERE model_id = ?", (model_id,))
+        conn.execute("DELETE FROM talent_models WHERE id = ?", (model_id,))
+    return {"deleted": True}
 
 
 @app.post("/api/talent/models/{model_id}/dimensions")
@@ -3643,24 +4044,41 @@ def generate_org_diagnosis(project_id: int) -> dict[str, Any]:
 def get_org_diagnosis_questions(project_id: int) -> dict[str, Any]:
     with get_connection() as conn:
         fetch_one_or_404(conn, "SELECT id FROM projects WHERE id = ?", (project_id,), "project")
-    return {
-        "project_id": project_id,
-        "dimensions": [
-            {
-                **dimension,
-                "questions": [
-                    {
-                        "key": f"{dimension['key']}_{index + 1}",
-                        "text": text,
-                        "score_min": 1,
-                        "score_max": 5,
-                    }
-                    for index, text in enumerate(dimension["questions"])
-                ],
-            }
-            for dimension in ORG_DIAGNOSIS_DIMENSIONS
-        ],
-    }
+        return {"project_id": project_id, "dimensions": fetch_org_diagnosis_dimensions(conn, project_id)}
+
+
+@app.put("/api/projects/{project_id}/org-diagnosis/questions")
+def save_org_diagnosis_questions(
+    project_id: int,
+    payload: OrganizationDiagnosisSavePayload,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    require_boss_or_hr_user(authorization)
+    with get_connection() as conn:
+        fetch_one_or_404(conn, "SELECT id FROM projects WHERE id = ?", (project_id,), "project")
+        conn.execute("DELETE FROM organization_diagnosis_dimensions WHERE project_id = ?", (project_id,))
+        for index, dimension in enumerate(payload.dimensions):
+            key = dimension.key or f"dimension_{index + 1}"
+            conn.execute(
+                """
+                INSERT INTO organization_diagnosis_dimensions
+                    (project_id, dimension_key, label, description, questions_json, score,
+                     comments, evidence, sort_order)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    project_id,
+                    key,
+                    dimension.label,
+                    dimension.description,
+                    dumps([question.model_dump() for question in dimension.questions]),
+                    dimension.score,
+                    dimension.comments,
+                    dimension.evidence,
+                    dimension.sort_order if dimension.sort_order is not None else index,
+                ),
+            )
+        return {"project_id": project_id, "dimensions": fetch_org_diagnosis_dimensions(conn, project_id)}
 
 
 @app.post("/api/projects/{project_id}/org-diagnosis/responses")
@@ -3788,25 +4206,56 @@ def generate_talent_profiles(project_id: int, authorization: str | None = Header
 def list_surveys(project_id: int, authorization: str | None = Header(default=None)) -> list[dict[str, Any]]:
     require_boss_or_hr_user(authorization)
     with get_connection() as conn:
-        rows = conn.execute(
-            "SELECT * FROM surveys WHERE project_id = ? ORDER BY created_at DESC, id DESC",
-            (project_id,),
-        ).fetchall()
-        return [as_dict(row) for row in rows]
+        fetch_one_or_404(conn, "SELECT id FROM projects WHERE id = ?", (project_id,), "project")
+        return build_survey_progress(conn, project_id)
 
 
 @app.post("/api/projects/{project_id}/surveys")
 def create_survey(project_id: int, payload: SurveyPayload, authorization: str | None = Header(default=None)) -> dict[str, Any]:
     user = require_hr_user(authorization)
     with get_connection() as conn:
-        cur = conn.execute(
-            """
-            INSERT INTO surveys (project_id, survey_type, title, description, status, created_by)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (project_id, payload.survey_type, payload.title, payload.description, payload.status, user["id"]),
+        fetch_one_or_404(conn, "SELECT id FROM projects WHERE id = ?", (project_id,), "project")
+        return create_survey_with_questions(
+            conn,
+            project_id,
+            payload.title,
+            payload.description,
+            payload.status,
+            user["id"],
+            [],
+            payload.survey_type,
         )
-        return as_dict(conn.execute("SELECT * FROM surveys WHERE id = ?", (cur.lastrowid,)).fetchone())
+
+
+@app.post("/api/projects/{project_id}/surveys/generate")
+def generate_project_survey(
+    project_id: int,
+    payload: SurveyGeneratePayload,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    user = require_hr_user(authorization)
+    with get_connection() as conn:
+        fetch_one_or_404(conn, "SELECT id FROM projects WHERE id = ?", (project_id,), "project")
+        questions = survey_questions_for_sources(conn, project_id, payload.source_mode, payload.model_id)
+        if not questions:
+            raise HTTPException(status_code=400, detail="No source questions are available for this project.")
+        return create_survey_with_questions(
+            conn,
+            project_id,
+            payload.title,
+            payload.description or f"Generated from {payload.source_mode}.",
+            payload.status,
+            user["id"],
+            questions,
+            "review_360" if payload.source_mode != "org_diagnosis" else "org_diagnosis",
+        )
+
+
+@app.get("/api/projects/{project_id}/surveys/{survey_id}")
+def get_survey_detail(project_id: int, survey_id: int, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    current_user(authorization)
+    with get_connection() as conn:
+        return serialize_survey_detail(conn, project_id, survey_id)
 
 
 @app.get("/api/projects/{project_id}/survey-progress")
@@ -3844,6 +4293,12 @@ def submit_survey_response(
 ) -> dict[str, Any]:
     user = current_user(authorization)
     with get_connection() as conn:
+        fetch_one_or_404(
+            conn,
+            "SELECT id FROM surveys WHERE id = ? AND project_id = ?",
+            (survey_id, project_id),
+            "survey",
+        )
         conn.execute(
             """
             INSERT INTO survey_responses (project_id, survey_id, user_id, response_json, submitted_at)
@@ -4912,6 +5367,60 @@ def update_action_plan(plan_id: int, payload: ActionPlanPayload, authorization: 
         after = fetch_one_or_404(conn, "SELECT * FROM action_plans WHERE id = ?", (plan_id,), "action plan")
         record_edit(conn, after.get("project_id"), None, "action_plan", plan_id, before, after)
         return serialize_action_plan(after)
+
+
+@app.get("/api/projects/{project_id}/expert-council/sessions")
+def list_expert_council_sessions(
+    project_id: int,
+    authorization: str | None = Header(default=None),
+) -> list[dict[str, Any]]:
+    require_admin_user(authorization)
+    with get_connection() as conn:
+        fetch_one_or_404(conn, "SELECT id FROM projects WHERE id = ?", (project_id,), "project")
+        rows = conn.execute(
+            """
+            SELECT * FROM expert_council_sessions
+            WHERE project_id = ?
+            ORDER BY updated_at DESC, id DESC
+            """,
+            (project_id,),
+        ).fetchall()
+        return [serialize_expert_council_session(row) for row in rows]
+
+
+@app.post("/api/projects/{project_id}/expert-council/sessions")
+def create_expert_council_session(
+    project_id: int,
+    payload: ExpertCouncilSessionPayload,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    user = require_admin_user(authorization)
+    with get_connection() as conn:
+        fetch_one_or_404(conn, "SELECT id FROM projects WHERE id = ?", (project_id,), "project")
+        cur = conn.execute(
+            """
+            INSERT INTO expert_council_sessions
+                (project_id, input_snapshot_json, output_json, confidence, risk_level, status, created_by, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (
+                project_id,
+                dumps(payload.input_snapshot),
+                dumps(payload.output),
+                payload.confidence,
+                payload.risk_level,
+                payload.status,
+                user["id"],
+            ),
+        )
+        return serialize_expert_council_session(
+            fetch_one_or_404(
+                conn,
+                "SELECT * FROM expert_council_sessions WHERE id = ?",
+                (int(cur.lastrowid),),
+                "expert council session",
+            )
+        )
 
 
 @app.get("/api/360/health")

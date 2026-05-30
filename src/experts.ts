@@ -36,29 +36,29 @@ export const experts: ExpertProfile[] = [
     avatar: '查',
     accent: '#e34b4b',
     stance: '组织问题必须回到业务结果、关键岗位和领导者日程。',
-    blindSpot: '把组织发展做成HR活动，而没有进入经营节奏。',
+    blindSpot: '把组织发展做成职能活动，而没有进入经营节奏。',
     evidence: '经营复盘、关键岗位盘点和领导者行为样本',
     intervention: '经营议题到组织动作的闭环会',
     viewpoint: '组织不是结构图，而是让战略变成结果的执行系统。',
     caseStudy:
       '在《Execution》中，查兰与拉里·博西迪讨论霍尼韦尔等企业如何把人才、战略和运营复盘绑在一起。',
-    takeaway: 'HR要进入经营会议，围绕关键岗位和业务承诺推动组织动作。',
+    takeaway: '组织发展团队要进入经营会议，围绕关键岗位和业务承诺推动组织动作。',
   },
   {
     id: 'ulrich',
     name: '尤里奇',
-    school: 'HR转型与三支柱派',
+    school: '人力资源转型与三支柱派',
     origin: '美国',
     avatar: '尤',
     accent: '#2f6fed',
-    stance: 'HR要从事务支持转向组织能力、人才和领导力的架构师。',
-    blindSpot: '只换HR组织架构，没有定义业务价值和服务边界。',
-    evidence: '组织能力评估、HR服务旅程和业务伙伴反馈',
-    intervention: 'HRBP-COE-SSC协同重构',
-    viewpoint: 'HR的成果不是项目数量，而是组织能力是否支撑战略。',
+    stance: '组织发展团队要从事务支持转向组织能力、人才和领导力的架构师。',
+    blindSpot: '只换人力资源组织架构，没有定义业务价值和服务边界。',
+    evidence: '组织能力评估、人力资源服务旅程和业务伙伴反馈',
+    intervention: '业务伙伴-专家中心-共享服务协同重构',
+    viewpoint: '组织发展工作的成果不是项目数量，而是组织能力是否支撑战略。',
     caseStudy:
-      '大型跨国企业的HR共享服务、COE和HRBP实践常被用来解释三支柱如何降低事务摩擦、强化业务伙伴角色。',
-    takeaway: '先定义HR服务对象和价值，再决定组织形态与交付机制。',
+      '大型跨国企业的人力资源共享服务、专家中心和业务伙伴实践常被用来解释三支柱如何降低事务摩擦、强化业务伙伴角色。',
+    takeaway: '先定义服务对象和价值，再决定组织形态与交付机制。',
   },
   {
     id: 'schein',
@@ -74,7 +74,7 @@ export const experts: ExpertProfile[] = [
     viewpoint: '要改变文化，先看组织在关键时刻如何真的做决定。',
     caseStudy:
       '沙因长期研究DEC等科技组织，强调创始人信念、工程师文化和管理假设会深刻影响组织命运。',
-    takeaway: 'HR要帮助管理层看见隐藏假设，而不是只改价值观措辞。',
+    takeaway: '组织发展团队要帮助管理层看见隐藏假设，而不是只改价值观措辞。',
   },
   {
     id: 'honghu',
@@ -86,7 +86,7 @@ export const experts: ExpertProfile[] = [
     stance: '本土组织问题要同时看战略、干部、机制和人情场域。',
     blindSpot: '照搬西方模型，忽略一号位、干部梯队和非正式网络。',
     evidence: '干部访谈、业务战役复盘和关键关系网络',
-    intervention: '一号位-干部-HR三方共创会',
+    intervention: '一号位-干部-组织发展团队三方共创会',
     viewpoint: '组织发展要进业务战场，在真实冲突里重塑责任关系。',
     caseStudy:
       '在高速增长企业的区域扩张场景中，常见问题不是流程缺失，而是总部、区域和职能干部的责任边界没有重谈。',
@@ -106,7 +106,7 @@ export const experts: ExpertProfile[] = [
     viewpoint: '激励不是把胡萝卜加大，而是让人重新拥有工作的掌控感。',
     caseStudy:
       'Atlassian 的 ShipIt/FedEx Day 和 Google 20% time 经常被用来说明自主时间如何激发创造性产出。',
-    takeaway: '对知识型团队，HR要重设计工作自主权和反馈机制。',
+    takeaway: '对知识型团队，组织发展团队要重设计工作自主权和反馈机制。',
   },
   {
     id: 'sandberg',
@@ -122,7 +122,7 @@ export const experts: ExpertProfile[] = [
     viewpoint: '组织要跑得快，必须让反馈更直接，让机会更可见。',
     caseStudy:
       '桑德伯格在Facebook高速增长期推动运营管理，也通过Lean In倡导女性领导力和同伴支持圈。',
-    takeaway: 'HR要把反馈、晋升和包容性纳入同一套领导力系统。',
+    takeaway: '组织发展团队要把反馈、晋升和包容性纳入同一套领导力系统。',
   },
   {
     id: 'lin',

@@ -124,3 +124,16 @@ Then manually verify:
 - Do not introduce a new database schema without updating initialization and compatibility logic.
 - If a bug fix requires assumptions, state them in the PR summary.
 - If a change cannot be fully verified, leave a clear manual testing checklist.
+
+## Variable name and logic checks
+
+Every time TypeScript / React code is modified, check the following before finishing:
+
+1. There must be no undefined variables.
+2. There must be no stale variable names left behind after refactors.
+3. Check role and user scope carefully, especially `role`, `user`, `currentUser`, `isAdmin`, and `isEmployee`.
+4. Check project data isolation carefully, especially `project_id` and `activeProjectId`.
+5. Do not call `.length` directly on an array value that may be `undefined`; use a safe fallback such as an empty array.
+6. User-visible text must not contain old product terms such as `HR`, `boss`, `Add Hypothesis`, `Delete`, or `Competency Model`.
+7. Run `npm run build` before finishing.
+8. If the build does not pass, do not say the task is complete.

@@ -5,7 +5,7 @@ export type RelationType =
   | 'partner'
   | 'self';
 
-export type UserRole = 'boss' | 'hr' | 'admin' | 'employee';
+export type UserRole = 'admin' | 'employee';
 
 export type Project = {
   id: number;
@@ -28,14 +28,18 @@ export type Question = {
   text: string;
   behavior_anchor: string;
   content?: string;
+  source_type?: string;
   question_type?: string;
+  applicable_relationships?: string[];
   relation_scope: string;
   rating_type: string;
   open_followup?: string;
   weight?: number;
+  required?: boolean;
   hypothesis_id?: number | null;
   model_id?: number | null;
   sort_order: number;
+  order?: number;
 };
 
 export type Dimension = {
@@ -130,6 +134,7 @@ export type Report = {
 };
 
 export type AISettings = {
+  provider?: string;
   base_url: string;
   model: string;
   hasModelCredential?: boolean;
@@ -171,10 +176,16 @@ export type OrganizationDiagnosisQuestion = {
 };
 
 export type OrganizationDiagnosisDimension = {
+  id?: number;
+  project_id?: number;
   key: string;
   label: string;
   description: string;
   questions: OrganizationDiagnosisQuestion[];
+  score?: number;
+  comments?: string;
+  evidence?: string;
+  sort_order?: number;
 };
 
 export type OrganizationDiagnosisResponse = {
@@ -234,6 +245,28 @@ export type Survey = {
   submitted_count?: number;
   pending_count?: number;
   completion_rate?: number;
+  question_count?: number;
+  source_types?: string[];
+};
+
+export type SurveyQuestion = {
+  id: number;
+  project_id: number;
+  survey_id: number;
+  source_type: 'org_diagnosis' | 'talent_model' | 'ai_model' | 'manual' | string;
+  question_type: string;
+  dimension_key: string;
+  dimension_label: string;
+  question_text: string;
+  options: string[];
+  required: boolean;
+  sort_order: number;
+};
+
+export type SurveyDetail = Survey & {
+  questions: SurveyQuestion[];
+  response_count: number;
+  source_types: string[];
 };
 
 export type SurveyResponse = {
@@ -448,6 +481,14 @@ export type TalentModel = {
   template?: string;
   name: string;
   description: string;
+  talent_type?: string;
+  hard_skills?: string;
+  soft_qualities?: string;
+  behavioral_indicators?: string;
+  interview_focus?: string;
+  risk_signals?: string;
+  interview_questions?: string;
+  rationale?: string;
   source_type: string;
   status: 'draft' | 'confirmed';
   dimensions: TalentDimension[];
@@ -464,11 +505,15 @@ export type ModelGeneratedQuestion = {
   dimension_id?: number;
   dimension_name: string;
   content: string;
+  source_type?: string;
   question_type: string;
+  applicable_relationships?: string[];
   relation_scope: string;
   rating_type: string;
   open_followup: string;
   weight: number;
+  required?: boolean;
+  order?: number;
 };
 
 export type DiagnosisRule = {
@@ -578,6 +623,19 @@ export type ActionPlan = {
   timeline: string;
   status: string;
   ai_generated: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ExpertCouncilSession = {
+  id: number;
+  project_id: number;
+  input_snapshot: Record<string, unknown>;
+  output: Record<string, unknown>;
+  confidence: number;
+  risk_level: 'low' | 'medium' | 'high' | 'critical';
+  status: 'draft' | 'confirmed';
+  created_by?: number | null;
   created_at: string;
   updated_at: string;
 };

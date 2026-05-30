@@ -107,14 +107,17 @@ def init_db() -> None:
                 dimension_id INTEGER NOT NULL REFERENCES dimensions(id) ON DELETE CASCADE,
                 hypothesis_id INTEGER,
                 model_id INTEGER,
+                source_type TEXT NOT NULL DEFAULT 'manual',
                 content TEXT NOT NULL DEFAULT '',
                 text TEXT NOT NULL,
                 behavior_anchor TEXT NOT NULL DEFAULT '',
                 question_type TEXT NOT NULL DEFAULT 'rating',
                 relation_scope TEXT NOT NULL DEFAULT 'all',
+                applicable_relationships TEXT NOT NULL DEFAULT '[]',
                 rating_type TEXT NOT NULL DEFAULT 'score_1_5',
                 open_followup TEXT NOT NULL DEFAULT '',
                 weight REAL NOT NULL DEFAULT 1.0,
+                required INTEGER NOT NULL DEFAULT 1,
                 sort_order INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
@@ -220,6 +223,14 @@ def init_db() -> None:
                 hypothesis_id INTEGER,
                 name TEXT NOT NULL,
                 description TEXT,
+                talent_type TEXT NOT NULL DEFAULT '',
+                hard_skills TEXT NOT NULL DEFAULT '',
+                soft_qualities TEXT NOT NULL DEFAULT '',
+                behavioral_indicators TEXT NOT NULL DEFAULT '',
+                interview_focus TEXT NOT NULL DEFAULT '',
+                risk_signals TEXT NOT NULL DEFAULT '',
+                interview_questions TEXT NOT NULL DEFAULT '',
+                rationale TEXT NOT NULL DEFAULT '',
                 source_type TEXT DEFAULT 'ai_generated',
                 created_by INTEGER,
                 status TEXT DEFAULT 'draft',
@@ -321,6 +332,19 @@ def init_db() -> None:
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
 
+            CREATE TABLE IF NOT EXISTS expert_council_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                input_snapshot_json TEXT NOT NULL DEFAULT '{}',
+                output_json TEXT NOT NULL DEFAULT '{}',
+                confidence REAL NOT NULL DEFAULT 0,
+                risk_level TEXT NOT NULL DEFAULT 'medium',
+                status TEXT NOT NULL DEFAULT 'draft',
+                created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE TABLE IF NOT EXISTS organization_diagnosis_responses (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -342,6 +366,22 @@ def init_db() -> None:
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(project_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS organization_diagnosis_dimensions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                dimension_key TEXT NOT NULL,
+                label TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                questions_json TEXT NOT NULL DEFAULT '[]',
+                score REAL NOT NULL DEFAULT 3,
+                comments TEXT NOT NULL DEFAULT '',
+                evidence TEXT NOT NULL DEFAULT '',
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(project_id, dimension_key)
             );
 
             CREATE TABLE IF NOT EXISTS talent_profiles (
@@ -380,6 +420,21 @@ def init_db() -> None:
                 response_json TEXT NOT NULL DEFAULT '{}',
                 submitted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(survey_id, user_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS survey_questions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                survey_id INTEGER NOT NULL REFERENCES surveys(id) ON DELETE CASCADE,
+                source_type TEXT NOT NULL DEFAULT 'manual',
+                question_type TEXT NOT NULL DEFAULT 'rating',
+                dimension_key TEXT NOT NULL DEFAULT '',
+                dimension_label TEXT NOT NULL DEFAULT '',
+                question_text TEXT NOT NULL,
+                options_json TEXT NOT NULL DEFAULT '[]',
+                required INTEGER NOT NULL DEFAULT 1,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
 
             CREATE TABLE IF NOT EXISTS organization_feedback (
@@ -467,8 +522,8 @@ def init_db() -> None:
                 employee_id INTEGER REFERENCES employees(id) ON DELETE SET NULL,
                 entity_type TEXT NOT NULL,
                 entity_id INTEGER NOT NULL,
-                edited_by TEXT NOT NULL DEFAULT 'HR',
-                editor TEXT NOT NULL DEFAULT 'HR',
+                edited_by TEXT NOT NULL DEFAULT '管理员',
+                editor TEXT NOT NULL DEFAULT '管理员',
                 before_json TEXT NOT NULL DEFAULT '{}',
                 after_json TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -492,10 +547,12 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_organization_risks_project ON organization_risks(project_id, status, risk_level);
             CREATE INDEX IF NOT EXISTS idx_diagnosis_reports_project ON diagnosis_reports(project_id, report_type, status);
             CREATE INDEX IF NOT EXISTS idx_action_plans_project ON action_plans(project_id, timeline, status);
+            CREATE INDEX IF NOT EXISTS idx_expert_council_project ON expert_council_sessions(project_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_org_diag_responses_project ON organization_diagnosis_responses(project_id, dimension);
             CREATE INDEX IF NOT EXISTS idx_talent_profiles_project ON talent_profiles(project_id, talent_type);
             CREATE INDEX IF NOT EXISTS idx_surveys_project ON surveys(project_id, survey_type, status);
             CREATE INDEX IF NOT EXISTS idx_survey_responses_project ON survey_responses(project_id, survey_id);
+            CREATE INDEX IF NOT EXISTS idx_survey_questions_project ON survey_questions(project_id, survey_id, source_type);
             CREATE INDEX IF NOT EXISTS idx_organization_feedback_project ON organization_feedback(project_id, feedback_type);
             CREATE INDEX IF NOT EXISTS idx_os_reports_project ON os_reports(project_id, report_type, user_id);
             """
@@ -515,13 +572,26 @@ def init_db() -> None:
                 ("competency_id", "INTEGER"),
                 ("hypothesis_id", "INTEGER"),
                 ("model_id", "INTEGER"),
+                ("source_type", "TEXT NOT NULL DEFAULT 'manual'"),
                 ("content", "TEXT NOT NULL DEFAULT ''"),
                 ("question_type", "TEXT NOT NULL DEFAULT 'rating'"),
                 ("relation_scope", "TEXT NOT NULL DEFAULT 'all'"),
+                ("applicable_relationships", "TEXT NOT NULL DEFAULT '[]'"),
                 ("rating_type", "TEXT NOT NULL DEFAULT 'score_1_5'"),
                 ("open_followup", "TEXT NOT NULL DEFAULT ''"),
                 ("weight", "REAL NOT NULL DEFAULT 1.0"),
+                ("required", "INTEGER NOT NULL DEFAULT 1"),
                 ("created_at", "TEXT DEFAULT ''"),
+            ],
+            "talent_models": [
+                ("talent_type", "TEXT NOT NULL DEFAULT ''"),
+                ("hard_skills", "TEXT NOT NULL DEFAULT ''"),
+                ("soft_qualities", "TEXT NOT NULL DEFAULT ''"),
+                ("behavioral_indicators", "TEXT NOT NULL DEFAULT ''"),
+                ("interview_focus", "TEXT NOT NULL DEFAULT ''"),
+                ("risk_signals", "TEXT NOT NULL DEFAULT ''"),
+                ("interview_questions", "TEXT NOT NULL DEFAULT ''"),
+                ("rationale", "TEXT NOT NULL DEFAULT ''"),
             ],
             "response_scores": [("text_feedback", "TEXT NOT NULL DEFAULT ''")],
             "responses": [
@@ -536,7 +606,7 @@ def init_db() -> None:
                 ("output_json", "TEXT NOT NULL DEFAULT '{}'"),
                 ("created_by", "INTEGER"),
             ],
-            "edit_history": [("edited_by", "TEXT NOT NULL DEFAULT 'HR'")],
+            "edit_history": [("edited_by", "TEXT NOT NULL DEFAULT '管理员'")],
             "users": [
                 ("employee_id", "INTEGER"),
                 ("status", "TEXT NOT NULL DEFAULT 'active'"),
@@ -560,6 +630,7 @@ def init_db() -> None:
         conn.execute("UPDATE edit_history SET edited_by = editor WHERE edited_by = ''")
         conn.execute("UPDATE questions SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL OR created_at = ''")
         conn.execute("UPDATE feedback_items SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL OR updated_at = ''")
+        conn.execute("UPDATE users SET role = 'admin' WHERE role IN ('boss', 'hr')")
 
         admin_exists = conn.execute("SELECT id FROM users WHERE username = ?", ("admin",)).fetchone()
         if not admin_exists:
@@ -616,8 +687,11 @@ def init_db() -> None:
             demo_employee_id = int(employee_row["id"])
 
         demo_users = [
-            ("boss@demo.com", "demo123", "boss", None),
-            ("hr@demo.com", "demo123", "hr", None),
+            ("admin", "admin123", "admin", None),
+            ("employee", "employee123", "employee", demo_employee_id),
+            ("admin@demo.com", "demo123", "admin", None),
+            ("boss@demo.com", "demo123", "admin", None),
+            ("hr@demo.com", "demo123", "admin", None),
             ("employee@demo.com", "demo123", "employee", demo_employee_id),
         ]
         for username, credential, role, employee_id in demo_users:

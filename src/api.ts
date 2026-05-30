@@ -87,6 +87,13 @@ export const api = {
       request<T>(`/projects/${projectId}/surveys`),
     create: <T>(projectId: number, body: unknown) =>
       request<T>(`/projects/${projectId}/surveys`, { method: 'POST', body }),
+    generate: <T>(projectId: number, body: unknown) =>
+      request<T>(`/projects/${projectId}/surveys/generate`, {
+        method: 'POST',
+        body,
+      }),
+    detail: <T>(projectId: number, surveyId: number) =>
+      request<T>(`/projects/${projectId}/surveys/${surveyId}`),
     progress: <T>(projectId: number) =>
       request<T>(`/projects/${projectId}/survey-progress`),
     myTasks: <T>(projectId: number) =>

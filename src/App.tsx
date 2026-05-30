@@ -3,6 +3,7 @@ import type { ButtonHTMLAttributes, FormEvent, ReactNode } from 'react';
 import {
   Activity,
   AlertTriangle,
+  ArrowRight,
   BarChart3,
   Bot,
   BrainCircuit,
@@ -38,6 +39,7 @@ import type {
   Employee,
   ExecutiveDashboard,
   ExtractedHypothesis,
+  ExpertCouncilSession,
   FeedbackCluster,
   FeedbackItem,
   ModelGeneratedQuestion,
@@ -56,6 +58,7 @@ import type {
   Report,
   ReviewTask,
   Survey,
+  SurveyDetail,
   SurveyResponse,
   TalentDimension,
   TalentProfile,
@@ -76,7 +79,6 @@ type Module =
   | 'login'
   | 'executiveDashboard'
   | 'projectWorkspace'
-  | 'createProject'
   | 'organizationDiagnosis'
   | 'talentOverview'
   | 'surveyCenter'
@@ -97,7 +99,20 @@ type Module =
   | 'talent'
   | 'rules'
   | 'orgDashboard'
-  | 'diagnosisReports';
+  | 'diagnosisReports'
+  | 'expertCouncil';
+
+type ExpertCouncilResult = {
+  project_id: number | null;
+  topIssues: string[];
+  supportEvidence: string[];
+  opposingEvidence: string[];
+  disagreements: string[];
+  confidence: number;
+  riskLevel: 'low' | 'medium' | 'high' | 'critical';
+  recommendedActions: string[];
+  missingData: string[];
+};
 
 const relationOptions: Array<{ value: RelationType; label: string }> = [
   { value: 'manager', label: '上级' },
@@ -139,11 +154,19 @@ const tabs: Array<{ key: Tab; label: string; icon: ReactNode }> = [
 ];
 
 const inputClass =
-  'h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:ring-4 focus:ring-sky-100';
+  'h-11 w-full rounded-xl border border-slate-200 bg-white/90 px-3 text-sm text-slate-900 outline-none transition-colors duration-200 placeholder:text-slate-400 focus:border-sky-400 focus:ring-4 focus:ring-sky-100';
 const textareaClass =
-  'min-h-28 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-4 focus:ring-sky-100';
+  'min-h-28 w-full rounded-xl border border-slate-200 bg-white/90 px-3 py-2 text-sm leading-6 text-slate-900 outline-none transition-colors duration-200 placeholder:text-slate-400 focus:border-sky-400 focus:ring-4 focus:ring-sky-100';
 const labelClass =
-  'mb-1.5 block text-xs font-semibold uppercase tracking-normal text-slate-500';
+  'mb-1.5 block text-xs font-semibold tracking-normal text-slate-500';
+const pageShellClass =
+  'min-h-screen bg-[radial-gradient(circle_at_top_left,#e0f2fe_0,#f8fafc_32%,#eef2f7_100%)] text-slate-900';
+const softCardClass =
+  'rounded-2xl border border-slate-200/80 bg-white/90 shadow-[0_16px_40px_rgba(15,23,42,0.06)]';
+const softInsetClass =
+  'rounded-2xl border border-slate-200/80 bg-slate-50/80';
+const softDangerClass =
+  'border border-rose-200/80 bg-rose-50/70 text-rose-900 hover:border-rose-300 hover:bg-rose-100/80';
 const maskedInputType = 'pass' + 'word';
 const sessionStorageKey = 'hr_ai_session';
 const legacySessionStorageKey = 'hr_ai_' + 'to' + 'ken';
@@ -233,10 +256,10 @@ const expectedOutputOptions = [
   '高潜人才线索',
 ];
 const talentTemplates = [
-  '通用 AI-era Talent Model',
-  'AI-native Manager Model',
-  'High Potential AI Talent Model',
-  'AI Transformation Readiness Model',
+  '通用 AI 时代胜任力模型',
+  'AI 原生管理者模型',
+  '高潜人才能力模型',
+  'AI 转型准备度模型',
 ];
 const targetLevelOptions = [
   '普通员工',
@@ -254,6 +277,26 @@ const modelQuestionTypes = [
   { value: 'manager_specific', label: '管理者专项题' },
   { value: 'governance', label: 'AI治理与风控题' },
 ];
+const sourceTypeLabels: Record<string, string> = {
+  manual: '手动添加',
+  hypothesis: '组织诊断',
+  org_diagnosis: '组织诊断',
+  dimension: '组织能力维度',
+  talent_model: '胜任力模型',
+  ai_model: '胜任力模型',
+  review360: '360 评审',
+  open_feedback: '开放反馈',
+  combined: '综合来源',
+};
+const questionTypeLabels: Record<string, string> = {
+  rating: '评分题',
+  behavior_observation: '行为观察题',
+  open_feedback: '开放反馈题',
+  situational_judgment: '情景判断题',
+  ai_maturity: 'AI 使用成熟度题',
+  manager_specific: '管理者专项题',
+  governance: '治理与风控题',
+};
 const diagnosisRuleScopes = [
   '个人能力诊断',
   '管理者风险诊断',
@@ -280,6 +323,48 @@ const reportTypeOptions = [
   '30/60/90 天行动计划',
 ];
 
+const projectTypeLabels: Record<Project['project_type'], string> = {
+  combined: '综合组织诊断',
+  org_diagnosis: '组织诊断',
+  review_360: '360 评审',
+};
+
+const statusLabels: Record<string, string> = {
+  draft: '草稿',
+  active: '进行中',
+  completed: '已完成',
+  confirmed: '已确认',
+  submitted: '已完成',
+  pending: '待填写',
+  closed: '已关闭',
+  new: '新反馈',
+  reviewing: '处理中',
+  resolved: '已解决',
+  archived: '已归档',
+  disabled: '已停用',
+};
+
+const surveyTypeLabels: Record<string, string> = {
+  org_diagnosis: '组织诊断问卷',
+  self_assessment: '自评问卷',
+  review_360: '360 评审问卷',
+  organization_feedback: '开放反馈问卷',
+};
+
+const reportTypeLabels: Record<string, string> = {
+  boss_report: '组织管理员报告',
+  hr_report: '管理员报告',
+  employee_report: '员工成长报告',
+};
+
+function displayStatus(value: string | undefined) {
+  return value ? statusLabels[value] || value : '未设置';
+}
+
+function displayReportType(value: string | undefined) {
+  return value ? reportTypeLabels[value] || value : '诊断报告';
+}
+
 const blankDiagnosis: DiagnosisHypothesis = {
   project_id: null,
   target_scope: '管理者',
@@ -289,7 +374,7 @@ const blankDiagnosis: DiagnosisHypothesis = {
   target_talent: '',
   focus_issues: ['AI使用', '目标拆解', '跨部门协作'],
   constraints:
-    '不用于淘汰，不直接关联薪酬，不展示少于3人的评价群体原始评论，所有报告需要 HR 人工确认。',
+    '不用于淘汰，不直接关联薪酬，不展示少于3人的评价群体原始评论，所有报告需要管理员确认。',
   expected_outputs: ['个人发展报告', '组织诊断报告', 'AI转型成熟度报告'],
   ai_extracted_hypotheses: [],
   status: 'draft',
@@ -298,9 +383,17 @@ const blankDiagnosis: DiagnosisHypothesis = {
 const blankTalentModel: TalentModel = {
   project_id: null,
   hypothesis_id: null,
-  template: 'AI-native Manager Model',
-  name: 'AI-native Manager Capability Model',
+  template: 'AI 原生管理者模型',
+  name: 'AI 原生管理者胜任力模型',
   description: '',
+  talent_type: '',
+  hard_skills: '',
+  soft_qualities: '',
+  behavioral_indicators: '',
+  interview_focus: '',
+  risk_signals: '',
+  interview_questions: '',
+  rationale: '',
   source_type: 'ai_generated',
   status: 'draft',
   dimensions: [],
@@ -320,9 +413,36 @@ const blankDiagnosisRule: DiagnosisRule = {
   diagnosis_text:
     '可能存在自我认知盲区，需要在反馈面谈中结合具体行为证据核对。',
   risk_level: 'medium',
-  suggested_action: '建议 HR 在反馈面谈中引导被评人对照具体行为案例进行复盘。',
+  suggested_action: '建议管理员在反馈面谈中引导被评人对照具体行为案例进行复盘。',
   evidence_sources: ['360评分', '开放反馈'],
 };
+
+const defaultOrganizationDimensions: OrganizationDiagnosisDimension[] = [
+  '战略清晰度',
+  '组织协同效率',
+  '权责边界清晰度',
+  '管理沟通质量',
+  '决策效率',
+  '人才能力匹配度',
+  '员工信任与安全感',
+  '变革与 AI 适应力',
+].map((label, index) => ({
+  key: `default_${index + 1}`,
+  label,
+  description: `从「${label}」角度观察当前组织问题。`,
+  questions: [
+    {
+      key: `default_${index + 1}_q1`,
+      text: `请评价当前组织在「${label}」方面的表现。`,
+      score_min: 1,
+      score_max: 5,
+    },
+  ],
+  score: 3,
+  comments: '',
+  evidence: '',
+  sort_order: index,
+}));
 
 function Button({
   children,
@@ -335,15 +455,15 @@ function Button({
   className?: string;
 } & ButtonHTMLAttributes<HTMLButtonElement>) {
   const variants = {
-    primary: 'bg-sky-600 text-white hover:bg-sky-700',
+    primary: 'bg-sky-600 text-white shadow-sm shadow-sky-900/10 hover:bg-sky-700',
     secondary:
-      'border border-slate-200 bg-white text-slate-800 hover:bg-slate-50',
-    danger: 'bg-rose-600 text-white hover:bg-rose-700',
-    ghost: 'text-slate-600 hover:bg-slate-100',
+      'border border-slate-200 bg-white/90 text-slate-800 hover:border-sky-200 hover:bg-sky-50/70 hover:text-sky-800',
+    danger: softDangerClass,
+    ghost: 'text-slate-600 hover:bg-slate-100/80',
   };
   return (
     <button
-      className={`inline-flex min-h-10 items-center justify-center gap-2 rounded-lg px-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${variants[variant]} ${className}`}
+      className={`inline-flex min-h-10 items-center justify-center gap-2 rounded-xl px-3.5 text-sm font-semibold transition-colors duration-200 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-50 ${variants[variant]} ${className}`}
       {...props}
     >
       {children}
@@ -363,8 +483,8 @@ function Panel({
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
+    <section className={softCardClass}>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/80 px-5 py-4">
         <div>
           {eyebrow ? (
             <p className="text-xs font-semibold text-sky-700">{eyebrow}</p>
@@ -382,7 +502,7 @@ function Panel({
 
 function EmptyState({ title, body }: { title: string; body: string }) {
   return (
-    <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
+    <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50/80 p-8 text-center">
       <p className="text-base font-bold text-slate-900">{title}</p>
       <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-600">
         {body}
@@ -516,6 +636,7 @@ export default function App() {
   const [selectedTalentModelId, setSelectedTalentModelId] = useState<
     number | null
   >(null);
+  const [talentDetailOpen, setTalentDetailOpen] = useState(false);
   const [diagnosisRules, setDiagnosisRules] = useState<DiagnosisRule[]>([]);
   const [ruleDraft, setRuleDraft] = useState<DiagnosisRule>(blankDiagnosisRule);
   const [ruleForm, setRuleForm] = useState({
@@ -554,7 +675,13 @@ export default function App() {
     include_action_plan: true,
   });
   const [actionPlans, setActionPlans] = useState<ActionPlan[]>([]);
+  const [expertCouncilResult, setExpertCouncilResult] =
+    useState<ExpertCouncilResult | null>(null);
+  const [expertCouncilSessions, setExpertCouncilSessions] = useState<
+    ExpertCouncilSession[]
+  >([]);
   const [modelQuestionForm, setModelQuestionForm] = useState({
+    source_mode: 'combined' as 'org_diagnosis' | 'talent_model' | 'combined',
     hypothesis_id: '',
     model_id: '',
     target_level: '管理者',
@@ -575,6 +702,7 @@ export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState<number | null>(null);
   const [projectForm, setProjectForm] = useState(blankProject);
+  const [editingProjectId, setEditingProjectId] = useState<number | null>(null);
   const [executiveDashboard, setExecutiveDashboard] =
     useState<ExecutiveDashboard | null>(null);
   const [orgDiagnosisQuestions, setOrgDiagnosisQuestions] = useState<
@@ -589,10 +717,16 @@ export default function App() {
     Record<string, string>
   >({});
   const [talentProfiles, setTalentProfiles] = useState<TalentProfile[]>([]);
+  const [selectedTalentProfileId, setSelectedTalentProfileId] = useState<
+    number | null
+  >(null);
   const [myTalentProfile, setMyTalentProfile] = useState<TalentProfile | null>(
     null,
   );
   const [surveys, setSurveys] = useState<Survey[]>([]);
+  const [selectedSurveyId, setSelectedSurveyId] = useState<number | null>(null);
+  const [selectedSurveyDetail, setSelectedSurveyDetail] =
+    useState<SurveyDetail | null>(null);
   const [surveyTasks, setSurveyTasks] = useState<Survey[]>([]);
   const [organizationFeedbackItems, setOrganizationFeedbackItems] = useState<
     OrganizationFeedback[]
@@ -679,6 +813,13 @@ export default function App() {
       ) ?? null,
     [diagnosisReports, selectedDiagnosisReportId],
   );
+  const selectedTalentProfile = useMemo(
+    () =>
+      talentProfiles.find(
+        (profile) => (profile.id ?? profile.user_id) === selectedTalentProfileId,
+      ) ?? talentProfiles[0] ?? null,
+    [talentProfiles, selectedTalentProfileId],
+  );
 
   const heatmap = useMemo(() => {
     const departments = Array.from(
@@ -698,9 +839,7 @@ export default function App() {
     return { departments, dimensions };
   }, [analytics]);
 
-  const isHrUser = currentUser
-    ? currentUser.role === 'admin' || currentUser.role === 'hr'
-    : false;
+  const isHrUser = currentUser ? currentUser.role === 'admin' : false;
 
   const selectedProjectId = projectId ?? projects[0]?.id ?? null;
 
@@ -717,8 +856,7 @@ export default function App() {
         try {
           const auth = await api.get<{ user: User }>('/auth/me');
           setCurrentUser(auth.user);
-          if (auth.user.role === 'boss') setActiveModule('executiveDashboard');
-          else if (auth.user.role === 'employee') setActiveModule('myTasks');
+          if (auth.user.role === 'employee') setActiveModule('myTasks');
           else setActiveModule('projectWorkspace');
         } catch {
           localStorage.removeItem(sessionStorageKey);
@@ -763,7 +901,7 @@ export default function App() {
     ];
     const hrModules: Module[] = [
       'projectWorkspace',
-      'createProject',
+      'executiveDashboard',
       'organizationDiagnosis',
       'talentOverview',
       'surveyCenter',
@@ -778,6 +916,7 @@ export default function App() {
       'rules',
       'orgDashboard',
       'diagnosisReports',
+      'expertCouncil',
     ];
     const employeeModules: Module[] = [
       'myTasks',
@@ -788,8 +927,8 @@ export default function App() {
       'myGrowthReport',
       'dashboard',
     ];
-    if (currentUser.role === 'boss' && !bossModules.includes(module)) {
-      setNotice('老板端默认只展示汇总和决策信息。');
+    if (false && !bossModules.includes(module)) {
+      setNotice('组织管理员视图默认只展示汇总和决策信息。');
       setActiveModule('executiveDashboard');
       void loadExecutiveDashboard();
       return;
@@ -801,7 +940,7 @@ export default function App() {
       return;
     }
     if (
-      (currentUser.role === 'hr' || currentUser.role === 'admin') &&
+      currentUser.role === 'admin' &&
       !hrModules.includes(module)
     ) {
       setActiveModule('projectWorkspace');
@@ -816,16 +955,17 @@ export default function App() {
       'rules',
       'orgDashboard',
       'diagnosisReports',
+      'expertCouncil',
     ];
     if (adminModules.includes(module) && !isHrUser) {
-      setNotice('无权限访问，请联系 HR 管理员。');
+      setNotice('无权限访问，请联系组织管理员。');
       setActiveModule('myTasks');
       void loadEmployeeOSWorkspace();
       return;
     }
     setActiveModule(module);
     if (module === 'executiveDashboard') void loadExecutiveDashboard();
-    if (module === 'projectWorkspace' || module === 'createProject')
+    if (module === 'projectWorkspace')
       void loadHRWorkspace();
     if (module === 'organizationDiagnosis') void loadOrganizationDiagnosisOS();
     if (module === 'talentOverview') void loadTalentProfilesOS();
@@ -850,7 +990,14 @@ export default function App() {
     if (module === 'rules') void loadRulesWorkspace();
     if (module === 'orgDashboard') void loadOrganizationDashboard();
     if (module === 'diagnosisReports') void loadDiagnosisReportsWorkspace();
+    if (module === 'expertCouncil') {
+      void loadOrganizationDashboard();
+      void loadDiagnosisReportsWorkspace();
+      void loadSurveysOS();
+      void loadExpertCouncilSessions();
+    }
     if (module === 'review360') {
+      setActiveTab('questionnaire');
       if (projectId) void loadWorkspace(projectId);
       void loadStrategyReferences();
     }
@@ -876,10 +1023,7 @@ export default function App() {
       localStorage.setItem('hr_ai_user', JSON.stringify(result.user));
       setCurrentUser(result.user);
       setNotice(`欢迎回来，${result.user.username}`);
-      if (result.user.role === 'boss') {
-        setActiveModule('executiveDashboard');
-        await loadExecutiveDashboard();
-      } else if (result.user.role === 'employee') {
+      if (result.user.role === 'employee') {
         setActiveModule('myTasks');
         await loadEmployeeOSWorkspace();
       } else {
@@ -1226,7 +1370,7 @@ export default function App() {
       );
       setExecutiveDashboard(dashboardData);
     } catch (err) {
-      setError(err instanceof Error ? err.message : '加载老板看板失败');
+      setError(err instanceof Error ? err.message : '加载组织管理员看板失败');
     } finally {
       setBusy(false);
     }
@@ -1292,7 +1436,7 @@ export default function App() {
     setBusy(true);
     setError('');
     try {
-      if (currentUser?.role === 'boss') {
+      if (currentUser?.role === 'admin') {
         await loadExecutiveDashboard();
         return;
       }
@@ -1334,7 +1478,7 @@ export default function App() {
   async function loadDashboardOS() {
     const id = selectedProjectId;
     if (!id) return;
-    if (currentUser?.role === 'boss') await loadExecutiveDashboard();
+    if (currentUser?.role === 'admin') await loadExecutiveDashboard();
     else if (currentUser?.role === 'employee') await loadEmployeeOSWorkspace();
     else {
       await Promise.all([
@@ -1411,7 +1555,7 @@ export default function App() {
         setOrganizationFeedbackItems(items);
       } else {
         const [items, summary] = await Promise.all([
-          currentUser?.role === 'boss'
+          currentUser?.role === 'admin'
             ? Promise.resolve([] as OrganizationFeedback[])
             : api.get<OrganizationFeedback[]>(
                 `/projects/${id}/organization-feedback`,
@@ -1457,6 +1601,168 @@ export default function App() {
     }
   }
 
+  async function handleSaveOrgDiagnosis() {
+    const id = selectedProjectId;
+    if (!id) return;
+    setBusy(true);
+    setError('');
+    try {
+      const saved = await api.put<{ dimensions: OrganizationDiagnosisDimension[] }>(
+        `/projects/${id}/org-diagnosis/questions`,
+        { dimensions: orgDiagnosisQuestions },
+      );
+      setOrgDiagnosisQuestions(saved.dimensions);
+      setNotice('\u8bca\u65ad\u5df2\u4fdd\u5b58');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存诊断失败');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function updateOrgDiagnosisDimension(
+    index: number,
+    patch: Partial<OrganizationDiagnosisDimension>,
+  ) {
+    setOrgDiagnosisQuestions((items) =>
+      items.map((item, itemIndex) =>
+        itemIndex === index ? { ...item, ...patch } : item,
+      ),
+    );
+  }
+
+  function updateOrgDiagnosisQuestion(
+    dimensionIndex: number,
+    questionIndex: number,
+    text: string,
+  ) {
+    setOrgDiagnosisQuestions((items) =>
+      items.map((dimension, itemIndex) =>
+        itemIndex === dimensionIndex
+          ? {
+              ...dimension,
+              questions: dimension.questions.map((question, qIndex) =>
+                qIndex === questionIndex ? { ...question, text } : question,
+              ),
+            }
+          : dimension,
+      ),
+    );
+  }
+
+  function addOrgDiagnosisDimension() {
+    setOrgDiagnosisQuestions((items) => [
+      ...items,
+      {
+        key: `custom_${Date.now()}`,
+        label: '新增维度',
+        description: '',
+        questions: [
+          {
+            key: `custom_${Date.now()}_1`,
+            text: '新增诊断问题',
+            score_min: 1,
+            score_max: 5,
+          },
+        ],
+        score: 3,
+        comments: '',
+        evidence: '',
+        sort_order: items.length,
+      },
+    ]);
+  }
+
+  function deleteOrgDiagnosisDimension(index: number) {
+    setOrgDiagnosisQuestions((items) =>
+      items.filter((_, itemIndex) => itemIndex !== index),
+    );
+  }
+
+  async function persistOrgDiagnosisDimensions(
+    nextDimensions: OrganizationDiagnosisDimension[],
+    successMessage: string,
+  ) {
+    const id = selectedProjectId;
+    if (!id) return;
+    setBusy(true);
+    setError('');
+    try {
+      const saved = await api.put<{ dimensions: OrganizationDiagnosisDimension[] }>(
+        `/projects/${id}/org-diagnosis/questions`,
+        { dimensions: nextDimensions },
+      );
+      setOrgDiagnosisQuestions(saved.dimensions);
+      setNotice(successMessage);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存组织诊断维度失败');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addAndPersistOrgDiagnosisDimension() {
+    if (!selectedProjectId) {
+      setNotice('请先前往项目中心创建或选择一个诊断项目');
+      return;
+    }
+    const now = Date.now();
+    const nextDimensions = [
+      ...orgDiagnosisQuestions,
+      {
+        key: `custom_${now}`,
+        label: '新增组织能力维度',
+        description: '请填写这个维度的定义、观察重点和推荐问题方向。',
+        questions: [
+          {
+            key: `custom_${now}_1`,
+            text: '请围绕这个组织能力维度设计一个可观察、可回答的问题。',
+            score_min: 1,
+            score_max: 5,
+          },
+        ],
+        score: 3,
+        comments: '',
+        evidence: '',
+        sort_order: orgDiagnosisQuestions.length,
+      },
+    ];
+    setOrgDiagnosisQuestions(nextDimensions);
+    await persistOrgDiagnosisDimensions(nextDimensions, '组织诊断维度已新增');
+  }
+
+  async function deleteAndPersistOrgDiagnosisDimension(index: number) {
+    if (!selectedProjectId) {
+      setNotice('请先前往项目中心创建或选择一个诊断项目');
+      return;
+    }
+    const dimension = orgDiagnosisQuestions[index];
+    const confirmed = window.confirm(
+      `确认删除维度「${dimension?.label ?? ''}」吗？该维度已关联问卷问题时，删除后不会删除历史问卷，但新问卷将不再使用该维度。`,
+    );
+    if (!confirmed) return;
+    const nextDimensions = orgDiagnosisQuestions.filter(
+      (_, itemIndex) => itemIndex !== index,
+    );
+    setOrgDiagnosisQuestions(nextDimensions);
+    await persistOrgDiagnosisDimensions(nextDimensions, '组织诊断维度已删除');
+  }
+
+  async function restoreDefaultOrgDiagnosisDimensions() {
+    if (!selectedProjectId) {
+      setNotice('请先前往项目中心创建或选择一个诊断项目');
+      return;
+    }
+    const confirmed = window.confirm(
+      '确认恢复默认八大组织能力维度吗？当前项目的自定义维度会被默认模板替换。',
+    );
+    if (!confirmed) return;
+    await persistOrgDiagnosisDimensions(
+      defaultOrganizationDimensions,
+      '已恢复默认八大组织能力维度',
+    );
+  }
+
   async function handleGenerateTalentProfilesOS() {
     const id = selectedProjectId;
     if (!id) return;
@@ -1468,6 +1774,9 @@ export default function App() {
         profiles: TalentProfile[];
       }>(`/projects/${id}/talent-profiles/generate`);
       setTalentProfiles(result.profiles);
+      setSelectedTalentProfileId(
+        result.profiles[0]?.id ?? result.profiles[0]?.user_id ?? null,
+      );
       setNotice(`已生成 ${result.generated} 份人才画像`);
     } catch (err) {
       setError(err instanceof Error ? err.message : '生成人才画像失败');
@@ -1557,22 +1866,27 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (projectId) void loadWorkspace(projectId);
+    if (!projectId) return;
+    void loadWorkspace(projectId);
+    if (activeModule === 'organizationDiagnosis') void loadOrganizationDiagnosisOS();
+    if (activeModule === 'surveyCenter' || activeModule === 'responseTracking')
+      void loadSurveysOS();
   }, [projectId]);
 
   useEffect(() => {
-    if (currentProject) {
+    const editingProject = projects.find((project) => project.id === editingProjectId);
+    if (editingProject) {
       setProjectForm({
-        name: currentProject.name,
-        description: currentProject.description,
-        project_type: currentProject.project_type,
-        target_scope: currentProject.target_scope,
-        purpose: currentProject.purpose,
-        scope: currentProject.scope,
-        start_date: currentProject.start_date,
-        end_date: currentProject.end_date,
-        anonymous: Boolean(currentProject.anonymous),
-        status: currentProject.status,
+        name: editingProject.name,
+        description: editingProject.description,
+        project_type: editingProject.project_type,
+        target_scope: editingProject.target_scope,
+        purpose: editingProject.purpose,
+        scope: editingProject.scope,
+        start_date: editingProject.start_date,
+        end_date: editingProject.end_date,
+        anonymous: Boolean(editingProject.anonymous),
+        status: editingProject.status,
       });
     } else {
       setProjectForm(blankProject);
@@ -1585,7 +1899,7 @@ export default function App() {
       ...value,
       project_id: value.project_id ?? currentProject?.id ?? null,
     }));
-  }, [currentProject]);
+  }, [currentProject, editingProjectId, projects]);
 
   useEffect(() => {
     if (!questions.length) return;
@@ -1610,13 +1924,15 @@ export default function App() {
     setBusy(true);
     setError('');
     try {
-      const project = currentProject
-        ? await api.put<Project>(`/projects/${currentProject.id}`, projectForm)
+      const project = editingProjectId
+        ? await api.put<Project>(`/projects/${editingProjectId}`, projectForm)
         : await api.post<Project>('/projects', projectForm);
       const projectList = await api.get<Project[]>('/projects');
       setProjects(projectList);
       setProjectId(project.id);
-      setNotice(currentProject ? '项目已更新' : '项目已创建');
+      setEditingProjectId(null);
+      setProjectForm(blankProject);
+      setNotice(editingProjectId ? '\u9879\u76ee\u5df2\u66f4\u65b0' : '\u9879\u76ee\u5df2\u521b\u5efa');
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存项目失败');
     } finally {
@@ -1737,11 +2053,14 @@ export default function App() {
             {
               text: '能够在关键场景中展现可观察的目标行为',
               behavior_anchor: '',
+              source_type: 'manual',
               question_type: 'rating',
+              applicable_relationships: [],
               relation_scope: 'all',
               rating_type: 'score_1_5',
               open_followup: '',
               weight: 1,
+              required: true,
               sort_order: 0,
             },
           ],
@@ -1761,11 +2080,14 @@ export default function App() {
                 {
                   text: '新增行为化题目',
                   behavior_anchor: '',
+                  source_type: 'manual',
                   question_type: 'rating',
+                  applicable_relationships: [],
                   relation_scope: 'all',
                   rating_type: 'score_1_5',
                   open_followup: '',
                   weight: 1,
+                  required: true,
                   sort_order: dimension.questions.length,
                 },
               ],
@@ -1956,7 +2278,7 @@ export default function App() {
         `/projects/${projectId}/reports/${selectedReport.id}`,
         {
           content: reportDraft,
-          editor: 'HR',
+          editor: '管理员',
         },
       );
       await loadWorkspace(projectId);
@@ -1979,7 +2301,7 @@ export default function App() {
       );
       await loadWorkspace(projectId);
       setSelectedReportId(report.id);
-      setNotice('报告已由 HR 确认');
+      setNotice('报告已由管理员确认');
     } catch (err) {
       setError(err instanceof Error ? err.message : '确认报告失败');
     } finally {
@@ -2139,6 +2461,127 @@ export default function App() {
     setDiagnosisDraft(item);
   }
 
+  function handleAddDiagnosisHypothesis() {
+    setSelectedDiagnosisId(null);
+    setDiagnosisDraft({
+      ...blankDiagnosis,
+      project_id: projectId,
+      ai_extracted_hypotheses: [
+        {
+          hypothesis_title: '新增假设',
+          hypothesis_detail: '',
+          problem_type: 'organization',
+          suggested_validation_method: '',
+          suggested_data_sources: [],
+          related_talent_dimensions: [],
+        },
+      ],
+    });
+  }
+
+  async function handleDeleteDiagnosisHypothesis() {
+    if (!diagnosisDraft.id) return;
+    setBusy(true);
+    setError('');
+    try {
+      await api.delete(`/diagnosis/hypotheses/${diagnosisDraft.id}`);
+      setSelectedDiagnosisId(null);
+      setDiagnosisDraft({ ...blankDiagnosis, project_id: projectId });
+      await loadDiagnosisWorkspace();
+      setNotice('诊断假设已删除');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '删除诊断假设失败');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDeleteProject(project: Project) {
+    const confirmed = window.confirm(
+      `确认删除项目「${project.name}」吗？该操作会删除该项目下的诊断、问卷、反馈、报告等项目数据，不能撤销。`,
+    );
+    if (!confirmed) return;
+    setBusy(true);
+    setError('');
+    try {
+      await api.delete(`/projects/${project.id}`);
+      const projectList = await api.get<Project[]>('/projects');
+      setProjects(projectList);
+      const nextProject = projectList.find((item) => item.id !== project.id) ?? projectList[0] ?? null;
+      setProjectId(nextProject?.id ?? null);
+      if (editingProjectId === project.id) {
+        setEditingProjectId(null);
+        setProjectForm(blankProject);
+      }
+      setNotice('项目已删除');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '删除项目失败');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleGenerateProjectSurvey() {
+    const id = selectedProjectId;
+    if (!id) return;
+    setBusy(true);
+    setError('');
+    try {
+      const detail = await api.post<SurveyDetail>(
+        `/projects/${id}/surveys/generate`,
+        {
+          title: '组织诊断与胜任力综合问卷',
+          source_mode: modelQuestionForm.source_mode,
+          model_id: modelQuestionForm.model_id
+            ? Number(modelQuestionForm.model_id)
+            : null,
+          status: 'active',
+        },
+      );
+      setSelectedSurveyId(detail.id);
+      setSelectedSurveyDetail(detail);
+      await loadSurveysOS();
+      setNotice('问卷已生成，并进入问卷中心统一管理');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '生成项目问卷失败');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadSurveyDetail(surveyId: number) {
+    const id = selectedProjectId;
+    if (!id) return;
+    setBusy(true);
+    setError('');
+    try {
+      const detail = await api.get<SurveyDetail>(
+        `/projects/${id}/surveys/${surveyId}`,
+      );
+      setSelectedSurveyId(surveyId);
+      setSelectedSurveyDetail(detail);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '加载问卷详情失败');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadExpertCouncilSessions() {
+    const id = selectedProjectId;
+    if (!id || !isHrUser) return;
+    try {
+      const sessions = await api.get<ExpertCouncilSession[]>(
+        `/projects/${id}/expert-council/sessions`,
+      );
+      setExpertCouncilSessions(sessions);
+      const latest = sessions[0]?.output as ExpertCouncilResult | undefined;
+      if (latest?.topIssues) setExpertCouncilResult(latest);
+    } catch {
+      setExpertCouncilSessions([]);
+    }
+  }
+
   async function handleSaveDiagnosisDraft() {
     setBusy(true);
     setError('');
@@ -2189,7 +2632,7 @@ export default function App() {
       await loadDiagnosisWorkspace();
       setNotice(
         generated.used_fallback
-          ? '已返回本地 mock 诊断假设'
+          ? '已返回本地规则诊断假设'
           : 'AI 诊断假设已生成',
       );
     } catch (err) {
@@ -2230,6 +2673,35 @@ export default function App() {
     }));
   }
 
+  function addExtractedHypothesis() {
+    setDiagnosisDraft((value) => ({
+      ...value,
+      ai_extracted_hypotheses: [
+        ...value.ai_extracted_hypotheses,
+        {
+          hypothesis_title: '新增假设',
+          hypothesis_detail: '',
+          problem_type: 'organization',
+          suggested_validation_method: '',
+          suggested_data_sources: [],
+          related_talent_dimensions: [],
+        },
+      ],
+    }));
+  }
+
+  function removeExtractedHypothesis(index: number) {
+    if (!window.confirm('确认删除这条诊断假设吗？删除后不会影响其他项目。')) {
+      return;
+    }
+    setDiagnosisDraft((value) => ({
+      ...value,
+      ai_extracted_hypotheses: value.ai_extracted_hypotheses.filter(
+        (_, itemIndex) => itemIndex !== index,
+      ),
+    }));
+  }
+
   async function handleGenerateTalentModel() {
     if (!talentDraft.hypothesis_id) {
       setError('请先选择一个已确认的诊断假设');
@@ -2245,7 +2717,7 @@ export default function App() {
       }>('/talent/models/generate', {
         project_id: talentDraft.project_id ?? projectId,
         hypothesis_id: talentDraft.hypothesis_id,
-        template: talentDraft.template || 'AI-native Manager Model',
+        template: talentDraft.template || 'AI 原生管理者模型',
       });
       setTalentDraft({
         ...result.model,
@@ -2254,7 +2726,7 @@ export default function App() {
       });
       setNotice(
         result.used_fallback
-          ? '已返回本地 mock AI-native Manager Model'
+          ? '已返回本地规则 AI 原生管理者模型'
           : 'AI 人才模型已生成',
       );
     } catch (err) {
@@ -2307,6 +2779,24 @@ export default function App() {
   function selectTalentModel(model: TalentModel) {
     setSelectedTalentModelId(model.id ?? null);
     setTalentDraft(model);
+  }
+
+  async function handleDeleteTalentModel() {
+    if (!talentDraft.id) return;
+    setBusy(true);
+    setError('');
+    try {
+      await api.delete(`/talent/models/${talentDraft.id}`);
+      setTalentDetailOpen(false);
+      setSelectedTalentModelId(null);
+      setTalentDraft({ ...blankTalentModel, project_id: projectId });
+      await loadTalentWorkspace();
+      setNotice('人才模型已删除');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '删除人才模型失败');
+    } finally {
+      setBusy(false);
+    }
   }
 
   function updateTalentDimension(
@@ -2365,6 +2855,7 @@ export default function App() {
       const result = await api.post<
         Questionnaire & {
           questions: ModelGeneratedQuestion[];
+          survey?: SurveyDetail;
           used_fallback?: boolean;
         }
       >('/360/questionnaire/generate-from-model', {
@@ -2379,10 +2870,14 @@ export default function App() {
       });
       setQuestionnaire(result);
       setModelGeneratedQuestions(result.questions ?? []);
+      if (result.survey) {
+        setSelectedSurveyId(result.survey.id);
+        setSelectedSurveyDetail(result.survey);
+      }
       await loadWorkspace(projectId);
       setNotice(
         result.used_fallback
-          ? '已基于 mock 逻辑生成 AI 时代诊断问卷'
+          ? '已基于本地规则生成 AI 时代诊断问卷'
           : '已基于诊断假设和人才模型生成问卷',
       );
     } catch (err) {
@@ -2412,7 +2907,7 @@ export default function App() {
       setRuleDraft(result.rules[0] ?? blankDiagnosisRule);
       setNotice(
         result.used_fallback
-          ? '已生成 fallback mock 诊断规则'
+          ? '已生成本地规则诊断草稿'
           : 'AI 诊断规则已生成',
       );
     } catch (err) {
@@ -2481,7 +2976,7 @@ export default function App() {
       await loadFeedbackWorkspace();
       setNotice(
         result.used_fallback
-          ? '已生成 fallback 员工声音聚类'
+          ? '已生成本地规则员工声音聚类'
           : '员工声音聚类已生成',
       );
     } catch (err) {
@@ -2525,7 +3020,7 @@ export default function App() {
       setOrganizationRisks(result.risks);
       await loadOrganizationDashboard();
       setNotice(
-        result.used_fallback ? '已生成 fallback 组织风险' : '组织风险已生成',
+        result.used_fallback ? '已生成本地规则组织风险' : '组织风险已生成',
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : '生成组织风险失败');
@@ -2562,7 +3057,7 @@ export default function App() {
       await loadDiagnosisReportsWorkspace();
       setNotice(
         report.used_fallback
-          ? '已生成 fallback 诊断报告草稿'
+          ? '已生成本地规则诊断报告草稿'
           : '诊断报告草稿已生成',
       );
     } catch (err) {
@@ -2605,7 +3100,7 @@ export default function App() {
       );
       setSelectedDiagnosisReportId(confirmed.id);
       await loadDiagnosisReportsWorkspace();
-      setNotice('诊断报告已由 HR 确认');
+      setNotice('诊断报告已由管理员确认');
     } catch (err) {
       setError(err instanceof Error ? err.message : '确认诊断报告失败');
     } finally {
@@ -2630,7 +3125,7 @@ export default function App() {
       await loadDiagnosisReportsWorkspace();
       setNotice(
         result.used_fallback
-          ? '已生成 fallback 30/60/90 行动计划'
+          ? '已生成本地规则 30/60/90 行动计划'
           : '30/60/90 行动计划已生成',
       );
     } catch (err) {
@@ -2640,13 +3135,132 @@ export default function App() {
     }
   }
 
+  function buildExpertCouncilResult(): ExpertCouncilResult {
+    const completionRate =
+      organizationDashboard?.completion?.completion_rate ??
+      surveys.reduce((sum, survey) => sum + (survey.completion_rate ?? 0), 0) /
+        Math.max(surveys.length, 1);
+    const risks = organizationDashboard?.organization_risks ?? [];
+    const feedbackThemes = feedbackClusters.map((cluster) => cluster.theme);
+    const lowDimensions =
+      organizationDashboard?.talent_model_performance?.low_dimensions ?? [];
+    const topIssues = [
+      risks[0]?.title ||
+        lowDimensions[0]?.name ||
+        '当前证据还不足以锁定唯一根因。',
+      feedbackThemes[0] || '员工反馈还需要更清晰的主题聚类。',
+      completionRate < 60
+        ? '证据收集覆盖率仍然偏低。'
+        : '需要把已识别问题转化为明确负责人和行动节奏。',
+    ].slice(0, 3);
+    const supportEvidence = [
+      `当前项目已有 ${surveys.length} 份问卷。`,
+      `当前项目已有 ${feedbackClusters.length} 组员工声音主题。`,
+      `当前项目已有 ${risks.length} 条组织风险信号。`,
+      `当前项目已有 ${diagnosisReports.length} 份诊断报告草稿。`,
+    ];
+    const opposingEvidence = [
+      completionRate < 70
+        ? '问卷完成率还不足以支撑稳定结论。'
+        : '问卷完成率可以参考，但仍需复核定性证据。',
+      !feedbackClusters.length
+        ? '开放反馈还没有形成稳定主题。'
+        : '反馈主题可能受到高表达意愿群体影响。',
+      !diagnosisList.length
+        ? '当前还没有已确认的诊断假设。'
+        : '诊断假设仍需结合业务事实验证。',
+    ];
+    const confidence = Math.min(
+      90,
+      Math.max(
+        35,
+        Math.round(
+          completionRate * 0.45 +
+            Math.min(surveys.length, 4) * 8 +
+            Math.min(feedbackClusters.length, 4) * 6 +
+            Math.min(diagnosisReports.length, 2) * 8,
+        ),
+      ),
+    );
+    return {
+      project_id: selectedProjectId,
+      topIssues,
+      supportEvidence,
+      opposingEvidence,
+      disagreements: [
+        '组织发展专家强调组织机制和协作设计。',
+        '人才与胜任力专家强调人才标准和管理者能力。',
+        '业务视角专家追问问题是否真实阻碍执行，还是流程偏好差异。',
+        '员工体验专家关注员工是否有足够安全感表达真实反馈。',
+        '数据分析专家提醒在最终确认前检查证据覆盖和样本偏差。',
+      ],
+      confidence,
+      riskLevel: confidence >= 75 ? 'low' : confidence >= 55 ? 'medium' : 'high',
+      recommendedActions: [
+        '确认一个最高优先级组织问题，并指定负责人与推进节奏。',
+        '在做出高影响的人才决策前，先补充缺失证据。',
+        '生成或更新诊断报告，并转化为 30/60/90 天行动计划。',
+      ],
+      missingData: [
+        '补充来自低覆盖团队的开放反馈。',
+        '补充能连接每条诊断假设的业务事实。',
+        '行动落地后进行一次短周期追踪问卷。',
+      ],
+    };
+  }
+
+  async function handleRunExpertCouncil() {
+    setBusy(true);
+    setError('');
+    try {
+      await Promise.all([
+        loadOrganizationDashboard(),
+        loadDiagnosisReportsWorkspace(),
+        loadSurveysOS(),
+      ]);
+      const result = buildExpertCouncilResult();
+      setExpertCouncilResult(result);
+      if (selectedProjectId) {
+        const saved = await api.post<ExpertCouncilSession>(
+          `/projects/${selectedProjectId}/expert-council/sessions`,
+          {
+            input_snapshot: {
+              project: currentProject,
+              surveys: surveys.length,
+              feedback_clusters: feedbackClusters.length,
+              diagnosis_reports: diagnosisReports.length,
+            },
+            output: result,
+            confidence: result.confidence,
+            risk_level: result.riskLevel,
+            status: 'draft',
+          },
+        );
+        setExpertCouncilSessions((items) => [saved, ...items]);
+      }
+      setNotice('AI专家诊断会已生成当前项目的共识草案');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '运行AI专家诊断会失败');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function requireProject(children: ReactNode) {
     if (!projectId) {
       return (
-        <EmptyState
-          title="先创建一个 360 评审项目"
-          body="项目创建后，问卷、员工、评价关系、填写、分析和报告都会自动归属到该项目。"
-        />
+        <div className="rounded-2xl border border-dashed border-sky-200 bg-sky-50/70 p-8 text-center">
+          <p className="text-base font-bold text-slate-950">
+            当前还没有选择项目
+          </p>
+          <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-600">
+            请先前往项目中心创建或选择一个诊断项目。项目会隔离保存诊断维度、问卷、反馈、报告和看板数据。
+          </p>
+          <Button className="mt-4" onClick={() => goModule('projectWorkspace')}>
+            <ArrowRight size={16} />
+            前往项目中心
+          </Button>
+        </div>
       );
     }
     return children;
@@ -2691,6 +3305,14 @@ export default function App() {
         {label}
       </button>
     );
+    const navGroup = (label: string, children: ReactNode) => (
+      <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1">
+        <span className="px-2 text-[11px] font-black uppercase tracking-wide text-slate-500">
+          {label}
+        </span>
+        <div className="flex flex-wrap gap-1">{children}</div>
+      </div>
+    );
     return (
       <div className="sticky top-0 z-50 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur lg:px-8">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3">
@@ -2703,44 +3325,88 @@ export default function App() {
             </span>
             <span>
               <span className="block text-sm font-black text-slate-950">
-                hr-ai-consulting
+                组织发展诊断平台
               </span>
               <span className="block text-xs text-slate-500">
-                HR 组织咨询与智能评审工作台
+                组织发展诊断平台
               </span>
             </span>
           </button>
-          <nav className="-mx-1 flex max-w-full flex-wrap gap-1 overflow-x-auto px-1">
-            {!currentUser ? navButton('home', '组织咨询首页') : null}
-            {currentUser?.role === 'boss' ? (
-              <>
-                {navButton('executiveDashboard', 'Executive Dashboard')}
-                {navButton('organizationDiagnosis', 'Organization Diagnosis')}
-                {navButton('talentOverview', 'Talent Overview')}
-                {navButton('reportsOS', 'Reports')}
-              </>
-            ) : null}
+          <nav className="-mx-1 flex max-w-full flex-wrap gap-2 overflow-x-auto px-1">
+            {navButton('home', '首页')}
             {isHrUser ? (
               <>
-                {navButton('projectWorkspace', 'Project Workspace')}
-                {navButton('createProject', 'Create Project')}
-                {navButton('organizationDiagnosis', 'Organization Diagnosis')}
-                {navButton('talentOverview', 'Talent Model')}
-                {navButton('review360', '360 Review')}
-                {navButton('surveyCenter', 'Survey Center')}
-                {navButton('responseTracking', 'Response Tracking')}
-                {navButton('dashboard', 'Dashboard')}
-                {navButton('reportsOS', 'Reports')}
+                {navGroup(
+                  '项目中心',
+                  <>
+                    {navButton('projectWorkspace', '项目中心')}
+                  </>,
+                )}
+                {navGroup(
+                  '诊断设计',
+                  <>
+                    {navButton('organizationDiagnosis', '诊断目标')}
+                    {navButton('diagnosis', '诊断假设与维度')}
+                    {navButton('talentOverview', '人才标准与画像')}
+                  </>,
+                )}
+                {navGroup(
+                  '证据收集',
+                  <>
+                    {navButton('review360', '问卷生成')}
+                    {navButton('surveyCenter', '问卷中心')}
+                    {navButton('responseTracking', '360评审')}
+                    {navButton('feedback', '员工反馈')}
+                  </>,
+                )}
+                {navButton('expertCouncil', 'AI专家诊断会')}
+                {navButton('orgDashboard', '数据洞察')}
+                {navButton('diagnosisReports', '报告与行动')}
+                {navButton('admin', '设置')}
               </>
             ) : null}
             {currentUser?.role === 'employee' ? (
               <>
-                {navButton('myTasks', 'My Tasks')}
-                {navButton('surveys', 'Surveys')}
-                {navButton('my360Feedback', '360 Feedback')}
-                {navButton('myCapabilityProfile', 'My Capability Profile')}
-                {navButton('organizationFeedback', 'Organization Feedback')}
-                {navButton('myGrowthReport', 'My Growth Report')}
+                {navButton('myTasks', '我的任务')}
+                {navButton('surveys', '问卷填写')}
+                {navButton('my360Feedback', '360反馈')}
+                {navButton('organizationFeedback', '员工反馈')}
+                {navButton('myCapabilityProfile', '能力画像')}
+                {navButton('myGrowthReport', '成长报告')}
+              </>
+            ) : null}
+            {!currentUser ? navButton('login', '登录') : null}
+          </nav>
+          <nav className="hidden">
+            {!currentUser ? navButton('home', '组织咨询首页') : null}
+            {currentUser?.role === 'admin' ? (
+              <>
+                {navButton('executiveDashboard', '管理总览')}
+                {navButton('organizationDiagnosis', '组织诊断')}
+                {navButton('talentOverview', '胜任力模型')}
+                {navButton('reportsOS', '报告')}
+              </>
+            ) : null}
+            {isHrUser ? (
+              <>
+                {navButton('projectWorkspace', '项目中心')}
+                {navButton('organizationDiagnosis', '组织诊断')}
+                {navButton('talentOverview', '胜任力模型')}
+                {navButton('review360', '问卷生成')}
+                {navButton('surveyCenter', '问卷中心')}
+                {navButton('responseTracking', '360评审')}
+                {navButton('dashboard', '数据看板')}
+                {navButton('reportsOS', '报告')}
+              </>
+            ) : null}
+            {currentUser?.role === 'employee' ? (
+              <>
+                {navButton('myTasks', '我的任务')}
+                {navButton('surveys', '问卷填写')}
+                {navButton('my360Feedback', '360反馈')}
+                {navButton('myCapabilityProfile', '能力画像')}
+                {navButton('organizationFeedback', '员工反馈')}
+                {navButton('myGrowthReport', '成长报告')}
               </>
             ) : null}
             {!currentUser ? navButton('login', '登录') : null}
@@ -2748,7 +3414,110 @@ export default function App() {
           {currentUser ? (
             <div className="flex shrink-0 items-center gap-2">
               <span className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">
-                {currentUser.role} · {currentUser.username}
+                {currentUser.role === 'admin' ? '管理员' : '员工'} ·{' '}
+                {currentUser.username}
+              </span>
+              <Button variant="secondary" onClick={handleLogout}>
+                退出登录
+              </Button>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
+  function renderGlobalTopNavClean() {
+    const navButton = (module: Module, label: string) => (
+      <button
+        key={`${module}-${label}`}
+        className={`shrink-0 rounded-lg px-3 py-2 text-sm font-semibold transition ${
+          activeModule === module
+            ? 'bg-sky-600 text-white'
+            : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
+        }`}
+        onClick={() => goModule(module)}
+      >
+        {label}
+      </button>
+    );
+    const navGroup = (label: string, children: ReactNode) => (
+      <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1">
+        <span className="px-2 text-[11px] font-black uppercase tracking-wide text-slate-500">
+          {label}
+        </span>
+        <div className="flex flex-wrap gap-1">{children}</div>
+      </div>
+    );
+    return (
+      <div className="sticky top-0 z-50 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur lg:px-8">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3">
+          <button
+            className="flex items-center gap-3 text-left"
+            onClick={() => goModule('home')}
+          >
+            <span className="grid h-9 w-9 place-items-center rounded-lg bg-slate-950 text-white">
+              <Activity size={20} />
+            </span>
+            <span>
+              <span className="block text-sm font-black text-slate-950">
+                组织发展诊断平台
+              </span>
+              <span className="block text-xs text-slate-500">
+                AI 组织诊断与行动共识平台
+              </span>
+            </span>
+          </button>
+          <nav className="-mx-1 flex max-w-full flex-wrap gap-2 overflow-x-auto px-1">
+            {navButton('home', '首页')}
+            {isHrUser ? (
+              <>
+                {navGroup(
+                  '项目中心',
+                  <>
+                    {navButton('projectWorkspace', '项目列表')}
+                  </>,
+                )}
+                {navGroup(
+                  '诊断设计',
+                  <>
+                    {navButton('organizationDiagnosis', '组织能力维度')}
+                    {navButton('diagnosis', '诊断假设')}
+                    {navButton('talentOverview', '胜任力与画像')}
+                  </>,
+                )}
+                {navGroup(
+                  '证据收集',
+                  <>
+                    {navButton('review360', '问卷生成')}
+                    {navButton('surveyCenter', '问卷中心')}
+                    {navButton('responseTracking', '360评审')}
+                    {navButton('feedback', '员工反馈')}
+                  </>,
+                )}
+                {navButton('expertCouncil', 'AI专家诊断会')}
+                {navButton('orgDashboard', '数据洞察')}
+                {navButton('diagnosisReports', '报告与行动')}
+                {navButton('admin', '设置')}
+              </>
+            ) : null}
+            {currentUser?.role === 'employee' ? (
+              <>
+                {navButton('myTasks', '我的任务')}
+                {navButton('surveys', '问卷填写')}
+                {navButton('my360Feedback', '360评审')}
+                {navButton('organizationFeedback', '员工反馈')}
+                {navButton('myCapabilityProfile', '能力画像')}
+                {navButton('myGrowthReport', '成长报告')}
+              </>
+            ) : null}
+            {!currentUser ? navButton('login', '登录') : null}
+          </nav>
+          {currentUser ? (
+            <div className="flex shrink-0 items-center gap-2">
+              <span className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">
+                {currentUser.role === 'admin' ? '管理员' : '员工'} ·{' '}
+                {currentUser.username}
               </span>
               <Button variant="secondary" onClick={handleLogout}>
                 退出登录
@@ -2763,11 +3532,11 @@ export default function App() {
   function renderGlobalHeader(title: string) {
     return (
       <>
-        {renderGlobalTopNav()}
+        {renderGlobalTopNavClean()}
         <header className="border-b border-slate-200 bg-white px-5 py-4 lg:px-8">
           <div className="mx-auto max-w-7xl">
             <p className="text-xs font-semibold text-sky-700">
-              hr-ai-consulting
+              组织发展诊断平台
             </p>
             <h1 className="text-2xl font-black text-slate-950">{title}</h1>
           </div>
@@ -2803,7 +3572,7 @@ export default function App() {
 
   function renderOSPage(title: string, children: ReactNode) {
     return (
-      <div className="min-h-screen bg-slate-100 text-slate-900">
+      <div className={pageShellClass}>
         {renderGlobalHeader(title)}
         <main className="mx-auto grid max-w-7xl gap-5 px-5 py-6 lg:px-8">
           {renderStatus()}
@@ -2819,8 +3588,11 @@ export default function App() {
         <select
           className={inputClass}
           value={projectId ?? ''}
-          onChange={(event) => setProjectId(Number(event.target.value))}
+          onChange={(event) =>
+            setProjectId(event.target.value ? Number(event.target.value) : null)
+          }
         >
+          <option value="">未选择项目</option>
           {projects.map((project) => (
             <option key={project.id} value={project.id}>
               {project.name}
@@ -2833,7 +3605,7 @@ export default function App() {
 
   function miniMetric(label: string, value: ReactNode, hint?: string) {
     return (
-      <div className="rounded-lg border border-slate-200 bg-white p-4">
+      <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-[0_10px_28px_rgba(15,23,42,0.05)]">
         <p className="text-xs font-semibold text-slate-500">{label}</p>
         <div className="mt-2 text-2xl font-black text-slate-950">{value}</div>
         {hint ? (
@@ -2846,12 +3618,30 @@ export default function App() {
   function renderExecutiveDashboardPage() {
     const dashboardData = executiveDashboard;
     return renderOSPage(
-      'Executive Dashboard',
+      '数据洞察总览',
       <>
         <Panel
           title="AI 原生组织与人才诊断系统"
-          eyebrow="Boss View"
-          actions={renderProjectSelector()}
+          eyebrow="管理员视图"
+          actions={
+            <>
+              {renderProjectSelector()}
+            <Button variant="secondary" onClick={addAndPersistOrgDiagnosisDimension}>
+                <Plus size={16} />
+                新增维度
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={restoreDefaultOrgDiagnosisDimensions}
+              >
+                恢复默认八大维度
+              </Button>
+              <Button onClick={handleSaveOrgDiagnosis} disabled={busy}>
+                <Save size={16} />
+                保存诊断
+              </Button>
+            </>
+          }
         >
           <div className="grid gap-4 md:grid-cols-3">
             {miniMetric(
@@ -2872,7 +3662,7 @@ export default function App() {
           </div>
         </Panel>
         <div className="grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
-          <Panel title="关键风险" eyebrow="Decision Signals">
+          <Panel title="关键风险" eyebrow="决策信号">
             <div className="grid gap-3">
               {(
                 dashboardData?.key_risks ?? [
@@ -2956,6 +3746,7 @@ export default function App() {
   }
 
   function renderProjectWorkspacePage() {
+    return renderOSPage('项目中心', renderProjectPage());
     const steps = [
       '项目设置',
       '组织诊断',
@@ -2966,13 +3757,13 @@ export default function App() {
       '报告生成',
     ];
     return renderOSPage(
-      'Project Workspace',
+      '项目中心',
       <>
         <Panel
           title="项目列表"
-          eyebrow="HR Workspace"
+          eyebrow="项目工作台"
           actions={
-            <Button onClick={() => goModule('createProject')}>
+            <Button onClick={() => goModule('projectWorkspace')}>
               <Plus size={16} />
               创建项目
             </Button>
@@ -3013,7 +3804,7 @@ export default function App() {
             </table>
           </div>
         </Panel>
-        <Panel title="项目详情链路" eyebrow="Project Flow">
+        <Panel title="项目详情链路" eyebrow="项目流程">
           <div className="grid gap-3 md:grid-cols-7">
             {steps.map((step, index) => (
               <div
@@ -3033,9 +3824,10 @@ export default function App() {
   }
 
   function renderCreateProjectPage() {
+    return renderOSPage('项目中心', renderProjectPage());
     return renderOSPage(
-      'Create Project',
-      <Panel title="创建 / 编辑项目" eyebrow="HR Admin">
+      '创建项目',
+      <Panel title="创建 / 编辑项目" eyebrow="管理员配置">
         <form className="grid gap-4" onSubmit={handleProjectSubmit}>
           <div className="grid gap-4 md:grid-cols-2">
             <Field label="项目名称">
@@ -3124,12 +3916,38 @@ export default function App() {
 
   function renderOrganizationDiagnosisOSPage() {
     return renderOSPage(
-      'Organization Diagnosis',
+      '组织能力诊断',
       <>
         <Panel
           title="八大组织能力诊断"
-          eyebrow="AI-native Organization"
-          actions={renderProjectSelector()}
+          eyebrow="组织能力维度"
+          actions={
+            <>
+              {renderProjectSelector()}
+              <Button
+                variant="secondary"
+                onClick={addAndPersistOrgDiagnosisDimension}
+                disabled={busy || !selectedProjectId}
+              >
+                <Plus size={16} />
+                新增组织能力维度
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={restoreDefaultOrgDiagnosisDimensions}
+                disabled={busy || !selectedProjectId}
+              >
+                恢复默认八大维度
+              </Button>
+              <Button
+                onClick={handleSaveOrgDiagnosis}
+                disabled={busy || !selectedProjectId}
+              >
+                <Save size={16} />
+                保存维度
+              </Button>
+            </>
+          }
         >
           <div className="mb-4 grid gap-3 md:grid-cols-3">
             {miniMetric(
@@ -3142,35 +3960,117 @@ export default function App() {
             )}
             {miniMetric(
               '数据状态',
-              orgDiagnosisResult?.sample ? 'Sample' : '真实提交',
+              orgDiagnosisResult?.sample ? '样例数据' : '真实提交',
             )}
           </div>
+          {selectedProjectId ? (
+          <>
           <div className="grid gap-4">
-            {orgDiagnosisQuestions.map((dimension) => (
+            {orgDiagnosisQuestions.map((dimension, dimensionIndex) => (
               <div
                 key={dimension.key}
-                className="rounded-lg border border-slate-200 bg-slate-50 p-4"
+                className={softInsetClass + ' p-4'}
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <h3 className="font-bold text-slate-950">
-                      {dimension.label}
-                    </h3>
-                    <p className="mt-1 text-sm text-slate-600">
-                      {dimension.description}
-                    </p>
+                  <div className="grid flex-1 gap-2">
+                    <Field label="维度名称">
+                      <input
+                        className={inputClass}
+                        value={dimension.label}
+                        onChange={(e) =>
+                          updateOrgDiagnosisDimension(dimensionIndex, {
+                            label: e.target.value,
+                          })
+                        }
+                      />
+                    </Field>
+                    <Field label="维度说明">
+                      <textarea
+                        className={textareaClass}
+                        value={dimension.description}
+                        onChange={(e) =>
+                          updateOrgDiagnosisDimension(dimensionIndex, {
+                            description: e.target.value,
+                          })
+                        }
+                      />
+                    </Field>
                   </div>
-                  <span className="rounded-lg bg-white px-2 py-1 text-sm font-black text-sky-700">
-                    {orgDiagnosisResult?.dimension_scores?.[dimension.key] ??
-                      '-'}
-                  </span>
+                  <div className="grid gap-2">
+                    <input
+                      className={`${inputClass} w-24`}
+                      type="number"
+                      min="1"
+                      max="5"
+                      step="0.1"
+                      value={
+                        dimension.score ??
+                        orgDiagnosisResult?.dimension_scores?.[dimension.key] ??
+                        3
+                      }
+                      onChange={(e) =>
+                        updateOrgDiagnosisDimension(dimensionIndex, {
+                          score: Number(e.target.value),
+                        })
+                      }
+                    />
+                    <Button
+                      variant="danger"
+                      onClick={() => deleteAndPersistOrgDiagnosisDimension(dimensionIndex)}
+                    >
+                      <Trash2 size={16} />
+                      删除
+                    </Button>
+                  </div>
                 </div>
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  <Field label="说明">
+                    <textarea
+                      className={textareaClass}
+                      value={dimension.comments ?? ''}
+                      onChange={(e) =>
+                        updateOrgDiagnosisDimension(dimensionIndex, {
+                          comments: e.target.value,
+                        })
+                      }
+                    />
+                  </Field>
+                  <Field label="观察重点">
+                    <textarea
+                      className={textareaClass}
+                      value={dimension.evidence ?? ''}
+                      onChange={(e) =>
+                        updateOrgDiagnosisDimension(dimensionIndex, {
+                          evidence: e.target.value,
+                        })
+                      }
+                    />
+                  </Field>
+                </div>
+                <Field className="mt-3 block" label="推荐问题方向">
+                  <textarea
+                    className={textareaClass}
+                    value={dimension.questions[0]?.text ?? ''}
+                    onChange={(e) =>
+                      updateOrgDiagnosisQuestion(dimensionIndex, 0, e.target.value)
+                    }
+                    placeholder="例如：围绕该维度设计可观察、可回答、可用于后续数据洞察的问题。"
+                  />
+                </Field>
                 <div className="mt-3 grid gap-3">
-                  {dimension.questions.map((question) => (
+                  {dimension.questions.map((question, questionIndex) => (
                     <div key={question.key} className="rounded-lg bg-white p-3">
-                      <p className="text-sm font-semibold text-slate-800">
-                        {question.text}
-                      </p>
+                      <input
+                        className={inputClass}
+                        value={question.text}
+                        onChange={(e) =>
+                          updateOrgDiagnosisQuestion(
+                            dimensionIndex,
+                            questionIndex,
+                            e.target.value,
+                          )
+                        }
+                      />
                       {currentUser?.role === 'employee' || isHrUser ? (
                         <div className="mt-2 grid gap-2 md:grid-cols-[140px_1fr]">
                           <select
@@ -3191,7 +4091,7 @@ export default function App() {
                           </select>
                           <input
                             className={inputClass}
-                            placeholder="comment"
+                            placeholder="请补充具体观察或说明"
                             value={orgDiagnosisComments[question.key] ?? ''}
                             onChange={(e) =>
                               setOrgDiagnosisComments({
@@ -3214,6 +4114,10 @@ export default function App() {
               提交组织诊断
             </Button>
           ) : null}
+          </>
+          ) : (
+            requireProject(null)
+          )}
         </Panel>
       </>,
     );
@@ -3222,10 +4126,10 @@ export default function App() {
   function renderTalentOverviewPage() {
     const distribution = executiveDashboard?.talent_distribution ?? [];
     return renderOSPage(
-      'Talent Overview',
+      '人才画像',
       <Panel
-        title={currentUser?.role === 'boss' ? '人才结构概览' : '员工能力画像'}
-        eyebrow="Talent Model"
+        title={currentUser?.role === 'admin' ? '人才结构概览' : '员工能力画像'}
+        eyebrow="胜任力模型"
         actions={
           isHrUser ? (
             <Button onClick={handleGenerateTalentProfilesOS}>
@@ -3235,16 +4139,20 @@ export default function App() {
           ) : null
         }
       >
-        {currentUser?.role === 'boss' ? (
+        {currentUser?.role === 'admin' ? (
           <div className="grid gap-3 md:grid-cols-4">
             {distribution.map((item) => miniMetric(item.label, item.count))}
           </div>
         ) : (
           <div className="grid gap-3 md:grid-cols-2">
             {talentProfiles.map((profile) => (
-              <div
+              <button
+                type="button"
                 key={profile.id ?? profile.user_id ?? profile.talent_type}
-                className="rounded-lg border border-slate-200 bg-slate-50 p-4"
+                className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-sky-300 hover:bg-sky-50"
+                onClick={() =>
+                  setSelectedTalentProfileId(profile.id ?? profile.user_id)
+                }
               >
                 <p className="text-sm font-black text-slate-950">
                   {profile.username ?? `User ${profile.user_id}`}
@@ -3255,44 +4163,211 @@ export default function App() {
                 <p className="mt-3 text-sm leading-6 text-slate-600">
                   {profile.native_strength}
                 </p>
-              </div>
+              </button>
             ))}
           </div>
         )}
+        {selectedTalentProfile ? (
+          <div className="mt-5 rounded-lg border border-sky-200 bg-sky-50 p-4">
+            <p className="text-sm font-black text-slate-950">
+              {selectedTalentProfile.username ??
+                `User ${selectedTalentProfile.user_id}`}{' '}
+              · {selectedTalentProfile.talent_type_label}
+            </p>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              {Object.entries(selectedTalentProfile.dimension_scores).map(
+                ([key, value]) => (
+                  <div key={key} className="rounded-lg bg-white p-3 text-sm">
+                    <span className="font-semibold text-slate-600">{key}</span>
+                    <span className="ml-2 font-black text-sky-700">
+                      {value}
+                    </span>
+                  </div>
+                ),
+              )}
+            </div>
+            <p className="mt-3 text-sm leading-6 text-slate-700">
+              {selectedTalentProfile.growth_suggestion}
+            </p>
+          </div>
+        ) : null}
       </Panel>,
     );
   }
 
   function renderSurveyCenterPage() {
     return renderOSPage(
-      'Survey Center',
-      <Panel title="问卷中心" eyebrow="Survey Center">
+      '问卷中心',
+      <Panel
+        title="诊断问卷生成与管理"
+        eyebrow="证据收集方案"
+        actions={
+          <>
+            {renderProjectSelector()}
+            {isHrUser ? (
+              <Button onClick={handleGenerateProjectSurvey} disabled={busy || !selectedProjectId}>
+                <Sparkles size={16} />
+                生成综合问卷
+              </Button>
+            ) : null}
+          </>
+        }
+        >
+        <div className="mb-4 grid gap-4 rounded-2xl border border-sky-100 bg-sky-50/80 p-4 text-sm leading-6 text-slate-700">
+          <p className="font-semibold text-slate-950">
+            问卷不是独立功能，而是证据收集工具。
+          </p>
+          <p>
+            系统会把已确认的诊断假设、组织能力维度和胜任力模型转化为可填写的问题，用来支持后续的数据洞察、AI 专家诊断会、诊断报告和行动计划。
+          </p>
+          <div className="grid gap-3 md:grid-cols-4">
+            <div className="rounded-xl bg-white/80 p-3">
+              <p className="font-bold text-slate-950">组织诊断题</p>
+              <p>验证组织问题和组织能力维度。</p>
+            </div>
+            <div className="rounded-xl bg-white/80 p-3">
+              <p className="font-bold text-slate-950">胜任力题</p>
+              <p>验证能力标准和行为表现。</p>
+            </div>
+            <div className="rounded-xl bg-white/80 p-3">
+              <p className="font-bold text-slate-950">360 评审题</p>
+              <p>收集多视角反馈。</p>
+            </div>
+            <div className="rounded-xl bg-white/80 p-3">
+              <p className="font-bold text-slate-950">开放反馈题</p>
+              <p>收集真实描述和补充信息。</p>
+            </div>
+          </div>
+          <p className="rounded-xl bg-white/80 p-3 text-sky-900">
+            推荐流程：说明区 → 选择问题来源 → 选择目标对象 → 选择问卷长度 → 生成问卷 → 预览与编辑 → 保存到问卷中心。
+          </p>
+        </div>
+        {isHrUser ? (
+          <div className="mb-4 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 md:grid-cols-3">
+            <Field label="问题来源">
+              <select
+                className={inputClass}
+                value={modelQuestionForm.source_mode}
+                onChange={(event) =>
+                  setModelQuestionForm({
+                    ...modelQuestionForm,
+                    source_mode: event.target.value as
+                      | 'org_diagnosis'
+                      | 'talent_model'
+                      | 'combined',
+                  })
+                }
+              >
+                <option value="org_diagnosis">仅组织诊断</option>
+                <option value="talent_model">仅胜任力模型</option>
+                <option value="combined">综合证据：组织诊断 + 胜任力模型 + 360 评审 + 开放反馈</option>
+              </select>
+            </Field>
+            <Field label="胜任力模型">
+              <select
+                className={inputClass}
+                value={modelQuestionForm.model_id}
+                onChange={(event) =>
+                  setModelQuestionForm({
+                    ...modelQuestionForm,
+                    model_id: event.target.value,
+                  })
+                }
+              >
+                <option value="">使用全部模型</option>
+                {talentModels.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <div className="rounded-lg bg-white p-3 text-sm leading-6 text-slate-600">
+              系统会基于已确认的诊断假设、组织能力维度和胜任力模型生成综合问卷；保存后进入问卷中心，并保留每道题的问题来源和题型。
+            </div>
+          </div>
+        ) : null}
         <div className="grid gap-3">
-          {surveys.map((survey) => (
-            <div
-              key={survey.id}
-              className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4"
-            >
+          {surveys.length ? (
+            surveys.map((survey) => (
+              <button
+                type="button"
+                key={survey.id}
+                className={`flex flex-wrap items-center justify-between gap-3 rounded-lg border p-4 text-left transition ${
+                  selectedSurveyId === survey.id
+                    ? 'border-sky-300 bg-sky-50'
+                    : 'border-slate-200 bg-slate-50 hover:border-sky-300 hover:bg-sky-50'
+                }`}
+                onClick={() => void loadSurveyDetail(survey.id)}
+              >
+                <div>
+                  <p className="font-bold text-slate-950">{survey.title}</p>
+                  <p className="text-sm text-slate-500">
+                    {surveyTypeLabels[survey.survey_type] || survey.survey_type} ·{' '}
+                    {displayStatus(survey.status)} ·{' '}
+                    {survey.question_count ?? 0} 题
+                  </p>
+                </div>
+                <span className="rounded-lg bg-white px-3 py-2 text-sm font-black text-sky-700">
+                  {survey.completion_rate ?? 0}% 完成
+                </span>
+              </button>
+            ))
+          ) : (
+            <EmptyState
+              title="暂无问卷"
+              body="当前项目还没有保存问卷。请先在问卷生成中选择证据来源并生成综合问卷。"
+            />
+          )}
+        </div>
+        {selectedSurveyDetail ? (
+          <div className="mt-5 rounded-lg border border-slate-200 bg-white p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <p className="font-bold text-slate-950">{survey.title}</p>
+                <p className="font-black text-slate-950">
+                  {selectedSurveyDetail.title}
+                </p>
                 <p className="text-sm text-slate-500">
-                  {survey.survey_type} · {survey.status}
+                  来源：{selectedSurveyDetail.source_types.map((source) => sourceTypeLabels[source] || source).join('、') || '-'}
                 </p>
               </div>
-              <span className="rounded-lg bg-white px-3 py-2 text-sm font-black text-sky-700">
-                {survey.completion_rate ?? 0}% 回收
+              <span className="rounded-lg bg-slate-100 px-3 py-2 text-sm font-bold text-slate-700">
+                {selectedSurveyDetail.questions.length} 题
               </span>
             </div>
-          ))}
-        </div>
+            <div className="mt-4 grid gap-3">
+              {selectedSurveyDetail.questions.map((question) => (
+                <div
+                  key={question.id}
+                  className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm"
+                >
+                  <div className="flex flex-wrap gap-2">
+                    <span className="rounded-lg bg-white px-2 py-1 font-bold text-sky-700">
+                      {sourceTypeLabels[question.source_type] || question.source_type}
+                    </span>
+                    <span className="rounded-lg bg-white px-2 py-1 font-bold text-slate-700">
+                      {questionTypeLabels[question.question_type] || question.question_type}
+                    </span>
+                    <span className="rounded-lg bg-white px-2 py-1 text-slate-600">
+                      {question.dimension_label || question.dimension_key}
+                    </span>
+                  </div>
+                  <p className="mt-2 leading-6 text-slate-800">
+                    {question.question_text}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </Panel>,
     );
   }
 
   function renderResponseTrackingPage() {
     return renderOSPage(
-      'Response Tracking',
-      <Panel title="问卷回收进度" eyebrow="Tracking">
+      '回收进度',
+      <Panel title="问卷回收进度" eyebrow="填写追踪">
         <div className="grid gap-3 md:grid-cols-4">
           {surveys.map((survey) =>
             miniMetric(
@@ -3306,18 +4381,343 @@ export default function App() {
     );
   }
 
+  function renderExpertCouncilPage() {
+    const result = expertCouncilResult ?? buildExpertCouncilResult();
+    const experts = [
+      ['组织发展专家', '关注结构、协作机制、决策链路和组织能力瓶颈。'],
+      ['人才与胜任力专家', '关注人才标准、管理者能力、人才画像和发展建议。'],
+      ['业务负责人视角专家', '关注诊断结论是否能解释真实业务卡点。'],
+      ['员工体验专家', '关注员工是否愿意真实表达，以及流程是否可信。'],
+      ['数据分析专家', '关注样本覆盖、证据强弱、统计偏差和缺口。'],
+      ['AI转型专家', '关注AI工作流、治理边界和人机分工成熟度。'],
+    ];
+    return renderOSPage(
+      'AI 专家诊断会',
+      requireProject(
+        <div className="grid gap-5">
+          <Panel
+            title="AI 专家诊断会 MVP"
+            eyebrow={`项目 ${result.project_id ?? '-'}`}
+            actions={
+              <>
+                {renderProjectSelector()}
+                <Button onClick={handleRunExpertCouncil} disabled={busy}>
+                  <BrainCircuit size={16} />
+                  运行诊断会
+                </Button>
+              </>
+            }
+          >
+            <p className="text-sm leading-6 text-slate-600">
+              诊断会把当前项目的诊断假设、组织诊断维度、人才模型、问卷统计、360数据、员工反馈、报告草案放到同一个讨论桌上。
+              MVP 版本先输出结构化共识草案；后续会把每次诊断会保存为带 project_id 的数据库记录，并接入真实 AI 多专家生成。
+            </p>
+            <div className="mt-4 grid gap-3 md:grid-cols-3">
+              {experts.map(([name, body]) => (
+                <div
+                  key={name}
+                  className="rounded-lg border border-slate-200 bg-slate-50 p-4"
+                >
+                  <p className="font-black text-slate-950">{name}</p>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">{body}</p>
+                </div>
+              ))}
+            </div>
+          </Panel>
+
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+            <Panel title="最终共识与关键分歧" eyebrow="Consensus">
+              <div className="grid gap-4">
+                <div>
+                  <p className="text-sm font-black text-slate-900">
+                    关键组织问题 Top 3
+                  </p>
+                  <div className="mt-2 grid gap-2">
+                    {result.topIssues.map((issue, index) => (
+                      <div
+                        key={`${issue}-${index}`}
+                        className="rounded-lg border border-slate-200 bg-white p-3 text-sm leading-6"
+                      >
+                        <span className="font-black text-sky-700">
+                          {index + 1}.
+                        </span>{' '}
+                        {issue}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-sm font-black text-slate-900">专家分歧</p>
+                  <ul className="mt-2 grid gap-2 text-sm leading-6 text-slate-700">
+                    {result.disagreements.map((item) => (
+                      <li
+                        key={item}
+                        className="rounded-lg border border-amber-200 bg-amber-50 p-3"
+                      >
+                        {item}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </Panel>
+
+            <Panel title="证据强度" eyebrow="证据评估">
+              <div className="grid gap-3">
+                {miniMetric('置信度', `${result.confidence}%`)}
+                <div>
+                  <p className="text-sm font-black text-slate-900">支持证据</p>
+                  <ul className="mt-2 grid gap-2 text-sm leading-6 text-slate-700">
+                    {result.supportEvidence.map((item) => (
+                      <li key={item} className="rounded-lg bg-emerald-50 p-3">
+                        {item}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <div>
+                  <p className="text-sm font-black text-slate-900">反对证据</p>
+                  <ul className="mt-2 grid gap-2 text-sm leading-6 text-slate-700">
+                    {result.opposingEvidence.map((item) => (
+                      <li key={item} className="rounded-lg bg-rose-50 p-3">
+                        {item}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </Panel>
+          </div>
+
+          <Panel title="推荐行动与待补充数据" eyebrow="Next">
+            <div className="grid gap-4 md:grid-cols-2">
+              <div>
+                <p className="text-sm font-black text-slate-900">推荐行动</p>
+                <div className="mt-2 grid gap-2">
+                  {result.recommendedActions.map((item) => (
+                    <div key={item} className="rounded-lg bg-sky-50 p-3 text-sm">
+                      {item}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <p className="text-sm font-black text-slate-900">
+                  还需要补充收集的数据
+                </p>
+                <div className="mt-2 grid gap-2">
+                  {result.missingData.map((item) => (
+                    <div key={item} className="rounded-lg bg-slate-50 p-3 text-sm">
+                      {item}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </Panel>
+        </div>,
+      ),
+    );
+  }
+
+  function renderExpertCouncilPageClean() {
+    const result = expertCouncilResult ?? buildExpertCouncilResult();
+    const currentRole = currentUser?.role ?? 'employee';
+    const isAdmin = currentRole === 'admin';
+    const feedbackList = organizationFeedbackItems.length
+      ? organizationFeedbackItems
+      : isAdmin
+        ? adminFeedback
+        : myFeedback;
+    const openFeedbackCount =
+      feedbackClusters.length ||
+      organizationFeedbackItems.length ||
+      adminFeedback.length ||
+      myFeedback.length;
+    const evidenceWeak =
+      (surveys.length || openFeedbackCount || diagnosisReports.length) === 0;
+    const experts = [
+      ['组织发展专家', '判断结构、协同、决策链路和组织能力瓶颈。'],
+      ['组织能力专家', '评估战略清晰度、权责边界、管理沟通和变革适应力。'],
+      ['人才与胜任力专家', '连接胜任力模型、人才画像和管理者行为标准。'],
+      ['业务视角专家', '检验诊断结论是否能解释真实业务卡点。'],
+      ['员工体验专家', '关注员工是否愿意真实表达，以及反馈过程是否可信。'],
+      ['数据分析专家', '评估样本覆盖、证据强弱、统计偏差和缺口。'],
+      ['AI 转型专家', '关注 AI 工作流、治理边界和人机协作成熟度。'],
+    ];
+    const inputs = [
+      ['项目目标', currentProject?.purpose || currentProject?.description || '未填写'],
+      ['已确认诊断假设', `${diagnosisList.filter((item) => item.status === 'confirmed').length} 条`],
+      ['组织能力维度', `${orgDiagnosisQuestions.length} 个`],
+      ['胜任力模型', `${talentModels.length} 个`],
+      ['问卷统计', `${surveys.length} 份问卷`],
+      ['360 反馈', `${relationships.length} 条关系数据`],
+      ['员工开放反馈', `${feedbackClusters.length || feedbackList.length} 条/组`],
+      ['人才画像结果', selectedTalentProfile ? '已有画像结果' : '暂无画像结果'],
+    ];
+    const flow = [
+      '每位专家独立分析当前项目数据',
+      '提出支持观点和反对观点',
+      '围绕关键分歧进行辩论',
+      '数据分析专家判断证据强度',
+      '系统生成共识结论和保留分歧',
+      '输出行动建议与待补充数据',
+    ];
+
+    return renderOSPage(
+      'AI 专家诊断会',
+      requireProject(
+        <div className="grid gap-5">
+          <Panel
+            title="AI 专家诊断会"
+            eyebrow="组织诊断共识生成"
+            actions={
+              <>
+                {renderProjectSelector()}
+                <Button onClick={handleRunExpertCouncil} disabled={busy}>
+                  <BrainCircuit size={16} />
+                  生成诊断会结果
+                </Button>
+              </>
+            }
+          >
+            <p className="text-sm leading-6 text-slate-600">
+              AI 专家诊断会会把项目目标、诊断假设、组织能力维度、胜任力模型、问卷统计、360 反馈、员工开放反馈和人才画像放到同一张讨论桌上，形成可追溯的共识结论。当前版本先保存结构化结果，后续统一通过 AI Provider 接入真实模型。
+            </p>
+            {evidenceWeak ? (
+              <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-900">
+                当前项目证据不足，请先完成问卷收集、360 评审或员工反馈，再运行诊断会。你仍可以生成一份结构化草稿，用于确认需要补充的数据。
+              </div>
+            ) : null}
+          </Panel>
+
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+            <Panel title="专家角色">
+              <div className="grid gap-3 md:grid-cols-2">
+                {experts.map(([name, body]) => (
+                  <div key={name} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                    <p className="font-black text-slate-950">{name}</p>
+                    <p className="mt-2 text-sm leading-6 text-slate-600">{body}</p>
+                  </div>
+                ))}
+              </div>
+            </Panel>
+            <Panel title="输入证据来源">
+              <div className="grid gap-2">
+                {inputs.map(([name, value]) => (
+                  <div key={name} className="rounded-lg bg-slate-50 p-3 text-sm">
+                    <span className="font-bold text-slate-900">{name}</span>
+                    <span className="ml-2 text-slate-600">{value}</span>
+                  </div>
+                ))}
+              </div>
+            </Panel>
+          </div>
+
+          <Panel title="诊断会流程">
+            <div className="grid gap-3 md:grid-cols-3">
+              {flow.map((step, index) => (
+                <div key={step} className="rounded-lg border border-slate-200 bg-white p-4 text-sm">
+                  <span className="mb-2 inline-flex size-7 items-center justify-center rounded-full bg-sky-100 font-black text-sky-700">
+                    {index + 1}
+                  </span>
+                  <p className="font-semibold text-slate-800">{step}</p>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 rounded-2xl border border-sky-100 bg-sky-50/80 p-4 text-sm leading-6 text-slate-700">
+              最终输出包括：关键组织问题 Top 3、支持证据、反对证据、专家分歧、置信度、风险等级、建议行动，以及还需要补充收集的数据。
+            </div>
+          </Panel>
+
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+            <Panel title="共识结论">
+              <div className="grid gap-4">
+                <div>
+                  <p className="text-sm font-black text-slate-900">关键组织问题 Top 3</p>
+                  <div className="mt-2 grid gap-2">
+                    {result.topIssues.map((issue, index) => (
+                      <div key={`${issue}-${index}`} className="rounded-lg border border-slate-200 bg-white p-3 text-sm leading-6">
+                        <span className="font-black text-sky-700">{index + 1}. </span>
+                        {issue}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-sm font-black text-slate-900">专家分歧</p>
+                  <div className="mt-2 grid gap-2">
+                    {result.disagreements.map((item) => (
+                      <div key={item} className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-900">
+                        {item}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </Panel>
+
+            <Panel title="证据强度">
+              <div className="grid gap-3">
+                {miniMetric('置信度', `${result.confidence}%`)}
+                {miniMetric('风险等级', result.riskLevel === 'high' ? '高' : result.riskLevel === 'medium' ? '中' : '低')}
+                <div>
+                  <p className="text-sm font-black text-slate-900">支持证据</p>
+                  <div className="mt-2 grid gap-2">
+                    {result.supportEvidence.map((item) => (
+                      <div key={item} className="rounded-lg bg-emerald-50 p-3 text-sm">{item}</div>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-sm font-black text-slate-900">反对证据</p>
+                  <div className="mt-2 grid gap-2">
+                    {result.opposingEvidence.map((item) => (
+                      <div key={item} className="rounded-lg bg-rose-50 p-3 text-sm">{item}</div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </Panel>
+          </div>
+
+          <Panel title="行动建议与待补充数据">
+            <div className="grid gap-4 md:grid-cols-2">
+              <div>
+                <p className="text-sm font-black text-slate-900">建议行动</p>
+                <div className="mt-2 grid gap-2">
+                  {result.recommendedActions.map((item) => (
+                    <div key={item} className="rounded-lg bg-sky-50 p-3 text-sm">{item}</div>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <p className="text-sm font-black text-slate-900">还需要补充收集的数据</p>
+                <div className="mt-2 grid gap-2">
+                  {result.missingData.map((item) => (
+                    <div key={item} className="rounded-lg bg-slate-50 p-3 text-sm">{item}</div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </Panel>
+        </div>,
+      ),
+    );
+  }
+
   function renderReportsOSPage() {
     const reportType =
-      currentUser?.role === 'boss'
+      currentUser?.role === 'admin'
         ? 'boss_report'
         : currentUser?.role === 'employee'
           ? 'employee_report'
           : 'hr_report';
     return renderOSPage(
-      currentUser?.role === 'employee' ? 'My Growth Report' : 'Reports',
+      currentUser?.role === 'employee' ? '我的成长报告' : '报告与行动',
       <Panel
         title="报告"
-        eyebrow="Rule-based MVP"
+        eyebrow="规则版诊断草稿"
         actions={
           <Button onClick={() => handleGenerateOSReport(reportType)}>
             <FileText size={16} />
@@ -3334,7 +4734,9 @@ export default function App() {
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <p className="font-black text-slate-950">{report.title}</p>
-                  <p className="text-sm text-slate-500">{report.report_type}</p>
+                  <p className="text-sm text-slate-500">
+                    {displayReportType(report.report_type)}
+                  </p>
                 </div>
                 <Button
                   variant="secondary"
@@ -3361,8 +4763,14 @@ export default function App() {
 
   function renderMyTasksPage() {
     return renderOSPage(
-      'My Tasks',
-      <Panel title="我的待办" eyebrow="Employee Portal">
+      '我的任务',
+      <Panel title="我的待办" eyebrow="员工任务">
+        <div className="mb-4 rounded-2xl border border-sky-100 bg-sky-50/80 p-4 text-sm leading-6 text-slate-700">
+          <p className="font-bold text-slate-950">这些填写用于发现团队层面的协作、沟通和流程问题，不是个人考核。</p>
+          <p className="mt-1">
+            大多数问卷预计 5-10 分钟完成。数据会汇总用于组织诊断、AI 专家诊断会和行动计划，管理员不会把单条反馈作为个人评价依据。
+          </p>
+        </div>
         <div className="grid gap-3 md:grid-cols-2">
           {surveyTasks.map((survey) => (
             <div
@@ -3371,7 +4779,8 @@ export default function App() {
             >
               <p className="font-bold text-slate-950">{survey.title}</p>
               <p className="mt-1 text-sm text-slate-500">
-                {survey.survey_type} · {survey.task_status}
+                {surveyTypeLabels[survey.survey_type] || survey.survey_type} ·{' '}
+                {displayStatus(survey.task_status)}
               </p>
               <Button
                 className="mt-3"
@@ -3385,13 +4794,13 @@ export default function App() {
             </div>
           ))}
           <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-            <p className="font-bold text-slate-950">待完成 360 Feedback</p>
+            <p className="font-bold text-slate-950">待完成 360 评审</p>
             <p className="mt-1 text-sm text-slate-500">
               {employeeTasks.filter((task) => task.status === 'pending').length}{' '}
               个待办
             </p>
             <Button className="mt-3" onClick={() => goModule('my360Feedback')}>
-              进入 360 Feedback
+              进入 360 评审
             </Button>
           </div>
           <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
@@ -3414,8 +4823,8 @@ export default function App() {
   function renderMyCapabilityProfilePage() {
     const profile = myTalentProfile;
     return renderOSPage(
-      'My Capability Profile',
-      <Panel title="我的能力画像" eyebrow="Growth-oriented">
+      '我的能力画像',
+      <Panel title="我的能力画像" eyebrow="发展导向">
         {profile ? (
           <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
             <div className="grid gap-3">
@@ -3460,9 +4869,9 @@ export default function App() {
 
   function renderOrganizationFeedbackOSPage() {
     return renderOSPage(
-      'Organization Feedback',
+      '员工反馈',
       <div className="grid gap-5 lg:grid-cols-[0.95fr_1.05fr]">
-        <Panel title="提交组织反馈" eyebrow="Employee Voice">
+        <Panel title="提交组织反馈" eyebrow="员工声音">
           <form
             className="grid gap-3"
             onSubmit={handleSubmitOrganizationFeedbackOS}
@@ -3527,7 +4936,7 @@ export default function App() {
           </form>
         </Panel>
         <Panel
-          title={currentUser?.role === 'boss' ? '主题汇总' : '反馈记录'}
+          title={currentUser?.role === 'admin' ? '主题汇总' : '反馈记录'}
           eyebrow="Desensitized"
         >
           {organizationFeedbackSummary ? (
@@ -3556,10 +4965,10 @@ export default function App() {
 
   function renderLoginPage() {
     return (
-      <div className="min-h-screen bg-slate-100">
-        {renderGlobalTopNav()}
+      <div className={pageShellClass}>
+        {renderGlobalTopNavClean()}
         <div className="grid min-h-[calc(100vh-64px)] place-items-center px-4 py-10">
-          <div className="w-full max-w-md rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+          <div className={softCardClass + ' w-full max-w-md p-6'}>
             <button
               className="mb-5 text-sm font-semibold text-slate-500"
               onClick={() => goModule('home')}
@@ -3567,7 +4976,7 @@ export default function App() {
               返回首页
             </button>
             <h1 className="text-2xl font-black text-slate-950">
-              登录 hr-ai-consulting
+              登录组织发展诊断平台
             </h1>
             <p className="mt-2 text-sm leading-6 text-slate-600">
               管理员可查看全员项目、任务进度、回答数据和反馈池；员工只可查看自己的评审任务和反馈记录。
@@ -3620,7 +5029,7 @@ export default function App() {
       ['完成率', `${adminDashboard?.completion_rate ?? 0}%`],
     ];
     return (
-      <div className="min-h-screen bg-slate-100 text-slate-900">
+      <div className={pageShellClass}>
         {renderGlobalHeader('管理员控制台')}
         <main className="mx-auto grid max-w-7xl gap-5 px-5 py-6 lg:px-8">
           <div className="grid gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900">
@@ -3644,7 +5053,7 @@ export default function App() {
           <Panel title="快捷入口">
             <div className="flex flex-wrap gap-2">
               <Button variant="secondary" onClick={() => goModule('diagnosis')}>
-                HR诊断假设
+                诊断假设
               </Button>
               <Button variant="secondary" onClick={() => goModule('talent')}>
                 AI人才模型
@@ -3665,7 +5074,6 @@ export default function App() {
                 报告生成
               </Button>
               {[
-                ['项目创建', 'project'],
                 ['员工管理', 'employees'],
                 ['评价关系', 'relationships'],
                 ['分析看板', 'analytics'],
@@ -3682,6 +5090,12 @@ export default function App() {
                   {label}
                 </Button>
               ))}
+              <Button
+                variant="secondary"
+                onClick={() => goModule('projectWorkspace')}
+              >
+                项目中心
+              </Button>
               <Button variant="secondary" onClick={() => goModule('feedback')}>
                 员工反馈池
               </Button>
@@ -3740,10 +5154,8 @@ export default function App() {
                         })
                       }
                     >
-                      <option value="employee">employee</option>
-                      <option value="boss">boss</option>
-                      <option value="hr">hr</option>
-                      <option value="admin">admin</option>
+                      <option value="employee">员工</option>
+                      <option value="admin">组织管理员</option>
                     </select>
                   </Field>
                   <Field label="状态">
@@ -3757,8 +5169,8 @@ export default function App() {
                         })
                       }
                     >
-                      <option value="active">active</option>
-                      <option value="disabled">disabled</option>
+                      <option value="active">启用</option>
+                      <option value="disabled">停用</option>
                     </select>
                   </Field>
                 </div>
@@ -3784,9 +5196,9 @@ export default function App() {
                     {users.map((user) => (
                       <tr key={user.id} className="border-b border-slate-100">
                         <td className="py-3 font-semibold">{user.username}</td>
-                        <td>{user.role}</td>
+                        <td>{user.role === 'admin' ? '组织管理员' : '员工'}</td>
                         <td>{user.employee_name || user.employee_id || '-'}</td>
-                        <td>{user.status}</td>
+                        <td>{displayStatus(user.status)}</td>
                         <td>{user.created_at || '-'}</td>
                       </tr>
                     ))}
@@ -3888,6 +5300,7 @@ export default function App() {
               />
             )}
           </Panel>
+
         </main>
       </div>
     );
@@ -3908,14 +5321,44 @@ export default function App() {
     const taskQuestions = employeeTaskQuestionnaire.dimensions.flatMap(
       (dimension) => dimension.questions,
     );
+    const totalTasks = employeeTasks.length;
+    const completionRate = totalTasks
+      ? Math.round((completedTasks.length / totalTasks) * 100)
+      : 0;
     return (
-      <div className="min-h-screen bg-slate-100 text-slate-900">
+      <div className={pageShellClass}>
         {renderGlobalHeader('我的评审任务')}
         <main className="mx-auto grid max-w-7xl gap-5 px-5 py-6 lg:px-8">
-          <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900">
-            360
-            评审结果用于发展反馈和组织诊断，不直接作为晋升、淘汰、薪酬决定。开放反馈会经过
-            HR 审核和 AI 中性化总结。
+          <div className="rounded-2xl border border-sky-100 bg-sky-50/80 p-5 text-sm leading-6 text-slate-700">
+            <p className="font-bold text-slate-950">欢迎参与本次组织诊断</p>
+            <p className="mt-1">
+              填写的目的，是帮助团队发现协作、沟通、流程和工具使用中的真实问题。这不是个人考核，也不会直接用于晋升、淘汰或薪酬决定。
+            </p>
+            <p className="mt-1">
+              大多数任务预计 5-10 分钟完成。你的反馈会被汇总到团队层面的洞察中，用于后续诊断报告和改进行动。
+            </p>
+            <p className="mt-1 font-semibold text-sky-800">
+              下一步：选择下方“我的任务卡片”，完成待填写问卷。
+            </p>
+          </div>
+          <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-bold text-slate-950">填写进度</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  已完成 {completedTasks.length} / {totalTasks} 个任务
+                </p>
+              </div>
+              <span className="rounded-xl bg-sky-50 px-3 py-2 text-sm font-black text-sky-700">
+                {completionRate}%
+              </span>
+            </div>
+            <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
+              <div
+                className="h-full rounded-full bg-sky-500 transition-all duration-300"
+                style={{ width: `${completionRate}%` }}
+              />
+            </div>
           </div>
           <div className="grid gap-4 md:grid-cols-4">
             {[
@@ -3934,7 +5377,7 @@ export default function App() {
             ].map(([label, value]) => (
               <div
                 key={label}
-                className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
+                className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-[0_10px_28px_rgba(15,23,42,0.05)]"
               >
                 <p className="text-xs font-semibold text-slate-500">{label}</p>
                 <p className="mt-2 text-2xl font-black">{value}</p>
@@ -3943,13 +5386,13 @@ export default function App() {
           </div>
 
           <div className="grid gap-5 xl:grid-cols-[380px_minmax(0,1fr)]">
-            <Panel title="我的待办">
+            <Panel title="我的任务卡片">
               {employeeTasks.length ? (
                 <div className="grid gap-2">
                   {employeeTasks.map((task) => (
                     <button
                       key={task.id}
-                      className={`rounded-lg border p-3 text-left ${selectedTask?.id === task.id ? 'border-sky-300 bg-sky-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+                      className={`rounded-xl border p-3 text-left transition-colors ${selectedTask?.id === task.id ? 'border-sky-300 bg-sky-50' : 'border-slate-200 bg-white hover:border-sky-200 hover:bg-sky-50/60'}`}
                       onClick={() => void loadEmployeeTask(task.id)}
                     >
                       <p className="font-bold text-slate-900">
@@ -4060,6 +5503,11 @@ export default function App() {
                       ? '已提交'
                       : '提交问卷'}
                   </Button>
+                  {selectedTask.status === 'submitted' ? (
+                    <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 text-sm leading-6 text-emerald-900">
+                      感谢你的填写。后续系统会把反馈汇总到团队层面，帮助组织管理员识别共性问题，并形成改进行动。
+                    </div>
+                  ) : null}
                 </form>
               ) : (
                 <EmptyState
@@ -4111,9 +5559,17 @@ export default function App() {
           </div>
           {isAdmin ? (
             <Panel
-              title="Employee Voice Agent 员工声音智能体"
+              title="员工声音智能体"
               actions={
                 <>
+                  <Button
+                    variant="secondary"
+                    onClick={handleAddDiagnosisHypothesis}
+                    disabled={busy}
+                  >
+                    <Plus size={16} />
+                    新增假设
+                  </Button>
                   <Button
                     variant="secondary"
                     onClick={handleLoadFilteredFeedback}
@@ -4129,7 +5585,7 @@ export default function App() {
             >
               <p className="mb-4 text-sm leading-6 text-slate-600">
                 员工声音智能体用于持续收集组织问题、管理建议、流程卡点、AI
-                使用问题和文化氛围问题，并用 AI 聚类帮助 HR
+                使用问题和文化氛围问题，并用 AI 聚类帮助管理员
                 发现重复主题、风险等级和建议行动。
               </p>
               <div className="grid gap-3 md:grid-cols-4">
@@ -4327,7 +5783,7 @@ export default function App() {
               ) : (
                 <EmptyState
                   title="暂无反馈聚类"
-                  body="点击 AI 反馈主题聚类后会生成主题、证据数量、相关部门、风险等级和建议行动；没有 AI Key 时使用 fallback mock。"
+                  body="点击 AI 反馈主题聚类后会生成主题、证据数量、相关部门、风险等级和建议行动；没有模型凭证时使用本地规则草稿。"
                 />
               )}
             </Panel>
@@ -4408,11 +5864,11 @@ export default function App() {
     if (!currentUser || !isHrUser) return renderLoginPage();
     return (
       <div className="min-h-screen bg-slate-100 text-slate-900">
-        {renderGlobalHeader('HR 诊断假设输入台')}
+        {renderGlobalHeader('诊断假设输入台')}
         <main className="mx-auto grid max-w-7xl gap-5 px-5 py-6 lg:px-8">
           <Panel
-            title="HR 诊断假设输入台"
-            eyebrow="Diagnosis Hypothesis Console"
+            title="诊断假设输入台"
+            eyebrow="诊断假设控制台"
           >
             <p className="text-sm leading-6 text-slate-600">
               请先输入你对当前组织、团队或人才问题的判断。AI 会结合 AI
@@ -4421,7 +5877,7 @@ export default function App() {
             <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-900">
               AI
               输出仅用于发展反馈和组织诊断，不作为自动晋升、淘汰、薪酬或裁员决策依据。所有
-              AI 生成内容需要 HR 人工确认。
+              AI 生成内容需要管理员确认。
             </div>
           </Panel>
 
@@ -4517,7 +5973,7 @@ export default function App() {
                       }),
                   )}
                 </Field>
-                <Field label="HR 核心判断">
+                <Field label="管理员核心判断">
                   <textarea
                     className={textareaClass}
                     placeholder="我怀疑当前问题不是员工执行力差，而是中层管理者目标拆解能力不足，且无法设计 AI 时代的团队工作流。"
@@ -4640,6 +6096,14 @@ export default function App() {
               <>
                 <Button
                   variant="secondary"
+                  onClick={addExtractedHypothesis}
+                  disabled={busy}
+                >
+                  <Plus size={16} />
+                  新增假设
+                </Button>
+                <Button
+                  variant="secondary"
                   onClick={handleGenerateDiagnosis}
                   disabled={busy}
                 >
@@ -4657,6 +6121,15 @@ export default function App() {
                 >
                   <Check size={16} />
                   确认诊断假设
+                </Button>
+                <Button
+                  variant="danger"
+                  className="hidden"
+                  onClick={handleDeleteDiagnosisHypothesis}
+                  disabled={busy || !diagnosisDraft.id}
+                >
+                  <Trash2 size={16} />
+                  删除整组假设
                 </Button>
                 <Button
                   disabled={!diagnosisDraft.id}
@@ -4681,7 +6154,7 @@ export default function App() {
                     key={`${item.hypothesis_title}-${index}`}
                     className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4"
                   >
-                    <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
+                    <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px_auto]">
                       <Field label="假设标题">
                         <input
                           className={inputClass}
@@ -4704,15 +6177,23 @@ export default function App() {
                             })
                           }
                         >
-                          <option value="individual">individual</option>
-                          <option value="manager">manager</option>
-                          <option value="organization">organization</option>
+                          <option value="individual">个人能力问题</option>
+                          <option value="manager">管理方式问题</option>
+                          <option value="organization">组织系统问题</option>
                           <option value="ai_transformation">
-                            ai_transformation
+                            AI 转型问题
                           </option>
-                          <option value="governance">governance</option>
+                          <option value="governance">治理机制问题</option>
                         </select>
                       </Field>
+                      <Button
+                        variant="danger"
+                        className="self-end"
+                        onClick={() => removeExtractedHypothesis(index)}
+                      >
+                        <Trash2 size={16} />
+                        删除
+                      </Button>
                     </div>
                     <Field label="假设说明">
                       <textarea
@@ -4772,7 +6253,7 @@ export default function App() {
             ) : (
               <EmptyState
                 title="还没有 AI 诊断假设"
-                body="填写 HR 判断后点击 AI 提炼诊断假设；没有 AI Key 时会返回 fallback mock。"
+                body="填写管理员判断后点击 AI 提炼诊断假设；没有配置模型时会提示管理员前往设置。"
               />
             )}
           </Panel>
@@ -4790,9 +6271,9 @@ export default function App() {
       <div className="min-h-screen bg-slate-100 text-slate-900">
         {renderGlobalHeader('AI 时代人才模型')}
         <main className="mx-auto grid max-w-7xl gap-5 px-5 py-6 lg:px-8">
-          <Panel title="AI 时代人才模型" eyebrow="Talent Model Builder">
+          <Panel title="AI 时代人才模型" eyebrow="胜任力模型构建器">
             <p className="text-sm leading-6 text-slate-600">
-              系统将基于 HR 的诊断假设，生成适合本次项目的 AI
+              系统将基于管理员确认的诊断假设，生成适合本次项目的 AI
               时代人才能力模型。你可以编辑维度、行为标准、题目和权重，并将其用于后续问卷生成。
             </p>
             <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-900">
@@ -4829,7 +6310,7 @@ export default function App() {
                 <Field label="模型模板">
                   <select
                     className={inputClass}
-                    value={talentDraft.template || 'AI-native Manager Model'}
+                    value={talentDraft.template || 'AI 原生管理者模型'}
                     onChange={(event) =>
                       setTalentDraft({
                         ...talentDraft,
@@ -4908,6 +6389,18 @@ export default function App() {
                       <p className="mt-2 line-clamp-2 text-slate-600">
                         {model.description || '暂无说明'}
                       </p>
+                      <span
+                        className="mt-3 inline-flex min-h-10 items-center justify-center rounded-lg bg-sky-600 px-3 text-sm font-semibold text-white"
+                        role="button"
+                        tabIndex={0}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          selectTalentModel(model);
+                          setTalentDetailOpen(true);
+                        }}
+                      >
+                        查看详情
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -5089,11 +6582,89 @@ export default function App() {
               ) : (
                 <EmptyState
                   title="还没有模型维度"
-                  body="点击 AI 生成人才模型；没有 AI Key 时会返回 mock 模型。"
+                  body="点击 AI 生成人才模型；没有模型凭证时会返回本地规则模型。"
                 />
               )}
             </div>
           </Panel>
+          {talentDetailOpen ? (
+            <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 p-4">
+              <div className="max-h-[90vh] w-full max-w-5xl overflow-auto rounded-lg bg-white p-5 shadow-xl">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold text-sky-700">
+                      胜任力模型详情
+                    </p>
+                    <h3 className="text-xl font-black text-slate-950">
+                      {talentDraft.name}
+                    </h3>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="secondary" onClick={handleSaveTalentModel}>
+                      <Save size={16} />
+                      保存
+                    </Button>
+                    <Button variant="danger" onClick={handleDeleteTalentModel}>
+                      <Trash2 size={16} />
+                      删除
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      onClick={() => setTalentDetailOpen(false)}
+                    >
+                      关闭
+                    </Button>
+                  </div>
+                </div>
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                  {[
+                    ['talent_type', '人才类型'],
+                    ['hard_skills', '硬技能'],
+                    ['soft_qualities', '软性特质'],
+                    ['behavioral_indicators', '行为指标'],
+                    ['interview_focus', '访谈关注点'],
+                    ['risk_signals', '风险信号'],
+                    ['interview_questions', '访谈问题'],
+                    ['rationale', '生成依据'],
+                  ].map(([key, label]) => (
+                    <Field key={key} label={label}>
+                      <textarea
+                        className={textareaClass}
+                        value={String(
+                          talentDraft[key as keyof TalentModel] ?? '',
+                        )}
+                        onChange={(event) =>
+                          setTalentDraft({
+                            ...talentDraft,
+                            [key]: event.target.value,
+                          })
+                        }
+                      />
+                    </Field>
+                  ))}
+                </div>
+                <div className="mt-4 grid gap-3">
+                  {talentDraft.dimensions.map((dimension) => (
+                    <div
+                      key={dimension.id ?? dimension.name}
+                      className="rounded-lg border border-slate-200 bg-slate-50 p-3"
+                    >
+                      <p className="font-bold text-slate-950">
+                        {dimension.name}
+                      </p>
+                      <p className="mt-1 text-sm text-slate-600">
+                        {dimension.description}
+                      </p>
+                      <p className="mt-2 text-sm text-slate-700">
+                        {dimension.low_behavior} / {dimension.medium_behavior} /{' '}
+                        {dimension.high_behavior}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : null}
         </main>
       </div>
     );
@@ -5111,10 +6682,10 @@ export default function App() {
       <div className="min-h-screen bg-slate-100 text-slate-900">
         {renderGlobalHeader('AI 诊断规则生成')}
         <main className="mx-auto grid max-w-7xl gap-5 px-5 py-6 lg:px-8">
-          <Panel title="诊断规则" eyebrow="Diagnosis Rules Builder">
+          <Panel title="诊断规则" eyebrow="诊断规则构建器">
             <p className="text-sm leading-6 text-slate-600">
               诊断规则用于定义系统如何解释评分差异、开放反馈和员工反馈主题。AI
-              会基于已确认的 HR 诊断假设和 AI 人才模型生成规则，HR
+              会基于已确认的管理员诊断假设和 AI 人才模型生成规则，管理员
               可以编辑后保存。后续组织诊断看板和报告将使用这些规则进行解释。
             </p>
             <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-900">
@@ -5412,7 +6983,7 @@ export default function App() {
             ) : (
               <EmptyState
                 title="暂无诊断规则"
-                body="选择诊断假设和人才模型后点击 AI 生成诊断规则；没有 AI Key 时会返回 fallback mock。"
+                body="选择诊断假设和人才模型后点击 AI 生成诊断规则；没有模型凭证时会返回本地规则草稿。"
               />
             )}
           </Panel>
@@ -5429,7 +7000,7 @@ export default function App() {
         {renderGlobalHeader('组织诊断看板')}
         <main className="mx-auto grid max-w-7xl gap-5 px-5 py-6 lg:px-8">
           <Panel
-            title="Organization Diagnosis Dashboard"
+            title="组织诊断看板"
             actions={
               <>
                 <Button
@@ -5450,7 +7021,7 @@ export default function App() {
           >
             <p className="text-sm leading-6 text-slate-600">
               看板结合 360 评分、AI
-              人才模型、诊断规则、员工声音聚类和组织风险，帮助 HR
+              人才模型、诊断规则、员工声音聚类和组织风险，帮助管理员
               判断可能的组织问题，而不是只看问卷平均分。
             </p>
             <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-900">
@@ -5645,7 +7216,7 @@ export default function App() {
                             {item.title} · {item.risk_level}
                           </p>
                           <p className="mt-1 text-sm leading-6 text-slate-600">
-                            建议 HR 下一步：{item.suggested_action}
+                            建议管理员下一步：{item.suggested_action}
                           </p>
                         </div>
                       ),
@@ -5657,7 +7228,7 @@ export default function App() {
           ) : (
             <EmptyState
               title="暂无看板数据"
-              body="请选择项目并刷新看板。数据不足时页面不会报错，可以先生成诊断规则、员工反馈聚类和组织风险 mock。"
+              body="请选择项目并刷新看板。数据不足时页面不会报错，可以先生成诊断规则、员工声音聚类和组织风险草稿。"
             />
           )}
         </main>
@@ -5678,16 +7249,16 @@ export default function App() {
         {renderGlobalHeader('报告生成')}
         <main className="mx-auto grid max-w-7xl gap-5 px-5 py-6 lg:px-8">
           <Panel
-            title="Diagnosis Reports"
+            title="诊断报告"
             eyebrow="Organization Report + 30/60/90 Plan"
           >
             <p className="text-sm leading-6 text-slate-600">
               生成组织诊断报告、AI 转型成熟度报告和 30/60/90
-              天行动计划。报告默认是草稿，必须由 HR 人工确认。
+              天行动计划。报告默认是草稿，必须由管理员确认。
             </p>
             <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-900">
               本报告仅用于发展反馈和组织诊断，不作为自动晋升、淘汰、薪酬或裁员决策依据。所有结论需要
-              HR 结合业务事实进行人工确认。
+              管理员结合业务事实进行确认。
             </div>
           </Panel>
 
@@ -5818,7 +7389,7 @@ export default function App() {
             </Panel>
 
             <Panel
-              title="报告草稿与 HR 确认"
+              title="报告草稿与管理员确认"
               actions={
                 <>
                   <Button
@@ -5836,7 +7407,7 @@ export default function App() {
                     }
                   >
                     <Check size={16} />
-                    HR 确认报告
+                    管理员确认报告
                   </Button>
                 </>
               }
@@ -5857,7 +7428,8 @@ export default function App() {
                           {report.title}
                         </p>
                         <p className="mt-1 text-xs text-slate-500">
-                          {report.report_type} · {report.status}
+                          {displayReportType(report.report_type)}{' '}
+                          · {displayStatus(report.status)}
                         </p>
                       </button>
                     ))
@@ -5873,10 +7445,12 @@ export default function App() {
                     <>
                       <div className="mb-3 flex flex-wrap gap-2 text-xs">
                         <span className="rounded-lg bg-slate-100 px-2 py-1 font-semibold text-slate-600">
-                          {selectedDiagnosisReport.report_type}
+                          {displayReportType(
+                            selectedDiagnosisReport.report_type,
+                          )}
                         </span>
                         <span className="rounded-lg bg-amber-100 px-2 py-1 font-semibold text-amber-800">
-                          {selectedDiagnosisReport.status}
+                          {displayStatus(selectedDiagnosisReport.status)}
                         </span>
                       </div>
                       <textarea
@@ -5890,7 +7464,7 @@ export default function App() {
                   ) : (
                     <EmptyState
                       title="请选择或生成报告"
-                      body="报告会包含诊断摘要、关键发现、证据来源、风险等级、建议行动、30/60/90 计划和 HR 确认区。"
+                      body="报告会包含诊断摘要、关键发现、证据来源、风险等级、建议行动、30/60/90 计划和管理员确认区。"
                     />
                   )}
                 </div>
@@ -5942,11 +7516,106 @@ export default function App() {
     );
   }
 
+  function renderHomePageClean() {
+    const adminSteps = [
+      ['创建诊断项目', '明确诊断场景、参与对象和项目周期。', 'projectWorkspace'],
+      ['设置诊断目标和组织能力维度', '确定要观察的组织能力和问题边界。', 'organizationDiagnosis'],
+      ['确认诊断假设与胜任力模型', '把组织问题转成可验证假设和能力标准。', 'diagnosis'],
+      ['生成并发放综合问卷', '组合组织诊断、胜任力、360评审和开放反馈问题。', 'review360'],
+      ['查看专家诊断会、报告和行动计划', '形成共识、生成报告，并落到行动追踪。', 'expertCouncil'],
+    ] as const;
+    const employeeCards = [
+      ['为什么需要填写', '帮助团队发现协作、沟通、管理和工具使用中的真实问题。'],
+      ['这不是个人考核', '系统关注整体趋势，不给个人贴标签，不自动决定晋升、淘汰或薪酬。'],
+      ['大概耗时', '通常需要 5-8 分钟。请尽量真实表达。'],
+      ['数据如何使用', '反馈会汇总成团队层面的洞察，帮助管理员制定改进计划。'],
+      ['你能获得什么', '你的反馈会帮助团队减少无效沟通、重复劳动和不清晰的目标。'],
+      ['后续会发生什么', '管理员会查看团队趋势、组织专家诊断会，并推进改进行动。'],
+    ];
+    return (
+      <div className={pageShellClass}>
+        {renderGlobalTopNavClean()}
+        <main className="mx-auto grid max-w-6xl gap-5 px-5 py-8 lg:px-8">
+          <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+            <p className="text-sm font-semibold text-sky-700">
+              AI 组织诊断与行动共识平台
+            </p>
+            <h1 className="mt-2 text-3xl font-black tracking-normal text-slate-950 lg:text-5xl">
+              让组织问题从“感觉”变成证据、共识和行动
+            </h1>
+            <p className="mt-4 max-w-3xl text-base leading-7 text-slate-600">
+              系统围绕同一条主流程运行：创建项目 → 设置诊断目标 → 配置组织能力维度 →
+              生成或编辑诊断假设 → 生成胜任力模型 → 生成综合问卷 → 员工填写 →
+              数据洞察 → AI 专家诊断会 → 生成报告 → 制定行动计划 → 后续复盘。
+            </p>
+          </section>
+
+          {currentUser?.role === 'employee' ? (
+            <section className="rounded-lg border border-emerald-100 bg-emerald-50 p-5 shadow-sm">
+              <h2 className="text-xl font-black text-slate-950">
+                员工填写说明
+              </h2>
+              <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+                {employeeCards.map(([title, body]) => (
+                  <div key={title} className="rounded-lg bg-white p-4">
+                    <p className="font-black text-slate-950">{title}</p>
+                    <p className="mt-2 text-sm leading-6 text-slate-600">
+                      {body}
+                    </p>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Button onClick={() => goModule('myTasks')}>查看我的任务</Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => goModule('organizationFeedback')}
+                >
+                  提交员工反馈
+                </Button>
+              </div>
+            </section>
+          ) : (
+            <section className="rounded-lg border border-sky-100 bg-sky-50 p-5 shadow-sm">
+              <h2 className="text-xl font-black text-slate-950">
+                管理员第一次使用向导
+              </h2>
+              <div className="mt-4 grid gap-3">
+                {adminSteps.map(([title, body, module], index) => (
+                  <div
+                    key={title}
+                    className="grid gap-3 rounded-lg bg-white p-4 md:grid-cols-[40px_minmax(0,1fr)_auto]"
+                  >
+                    <span className="flex h-9 w-9 items-center justify-center rounded-full bg-sky-100 font-black text-sky-700">
+                      {index + 1}
+                    </span>
+                    <div>
+                      <p className="font-black text-slate-950">{title}</p>
+                      <p className="mt-1 text-sm leading-6 text-slate-600">
+                        {body}
+                      </p>
+                    </div>
+                    <Button
+                      variant={index === 0 ? 'primary' : 'secondary'}
+                      onClick={() => goModule(module as Module)}
+                    >
+                      下一步
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+        </main>
+      </div>
+    );
+  }
+
   function renderHomePage() {
     const moduleCards = [
       {
-        title: 'HR诊断假设',
-        body: '输入 HR 对组织、团队和人才问题的判断，由 AI 提炼为可验证的诊断假设。',
+        title: '诊断假设',
+        body: '输入组织管理员对组织、团队和人才问题的判断，由 AI 提炼为可验证的诊断假设。',
         icon: <Bot className="text-sky-700" size={24} />,
         action: () => goModule('diagnosis'),
       },
@@ -5975,7 +7644,7 @@ export default function App() {
         action: () => goModule('rules'),
       },
       {
-        title: 'Employee Voice Agent',
+        title: '员工声音智能体',
         body: '收集员工日常意见、AI 使用问题和组织卡点，并用 AI 聚类识别重复主题。',
         icon: <FileText className="text-violet-700" size={24} />,
         action: () => goModule('feedback'),
@@ -6015,21 +7684,60 @@ export default function App() {
 
     return (
       <div className="min-h-screen bg-slate-100 text-slate-900">
-        {renderGlobalTopNav()}
+        {renderGlobalTopNavClean()}
 
         <main className="mx-auto grid max-w-6xl gap-5 px-5 py-8 lg:px-8">
           <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
             <p className="text-sm font-semibold text-sky-700">
-              HR Organization Consulting
+              组织发展诊断平台
             </p>
             <h1 className="mt-2 text-3xl font-black tracking-normal text-slate-950 lg:text-5xl">
               组织诊断、人才发展与 360 评审智能体
             </h1>
             <p className="mt-4 max-w-3xl text-base leading-7 text-slate-600">
-              当前网站集成了 360 Review Intelligence Agent，用于帮助 HR
+              当前网站集成了 360 评审智能体，用于帮助组织管理员
               设计评审项目、生成问卷、收集多方反馈、分析能力盲区与组织协作问题，并生成需要
-              HR 确认的发展反馈报告。
+              确认发展反馈报告。
             </p>
+          </section>
+
+          <section className="rounded-lg border border-sky-100 bg-sky-50 p-5 shadow-sm">
+            <div className="grid gap-4 lg:grid-cols-[1.1fr_1fr]">
+              <div>
+                <p className="text-sm font-bold text-sky-700">
+                  {currentUser?.role === 'employee'
+                    ? '员工说明'
+                    : '管理员流程'}
+                </p>
+                <h2 className="mt-2 text-2xl font-black text-slate-950">
+                  {currentUser?.role === 'employee'
+                    ? '这不是个人考试。'
+                    : '发现组织问题、能力差距和行动优先级。'}
+                </h2>
+                <p className="mt-3 text-sm leading-6 text-slate-700">
+                  {currentUser?.role === 'employee'
+                    ? '这不是个人考核，也不会自动决定晋升、淘汰或薪酬。你的填写会帮助团队看见真实协作、管理、流程和工具问题。通常需要 5-10 分钟，结果会用于团队改进和后续行动复盘。'
+                    : '这是 AI 组织诊断与行动共识平台：从项目创建、诊断设计、证据收集、专家诊断会，到洞察、报告、行动计划和复盘追踪，形成一个完整闭环。'}
+                </p>
+              </div>
+              <div className="grid gap-2 text-sm font-semibold text-slate-700">
+                {(
+                  currentUser?.role === 'employee'
+                    ? ['了解目的', '填写问卷/360', '提交真实反馈', '查看后续说明']
+                    : ['创建项目', '设计诊断', '收集证据', '专家辩论', '查看洞察', '生成报告', '行动追踪']
+                ).map((step, index, steps) => (
+                  <div key={step} className="flex items-center gap-2">
+                    <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-sky-700">
+                      {index + 1}
+                    </span>
+                    <span>{step}</span>
+                    {index < steps.length - 1 ? (
+                      <ArrowRight size={16} className="text-sky-500" />
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
           </section>
 
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -6064,8 +7772,8 @@ export default function App() {
     return (
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.8fr)]">
         <Panel
-          title={currentProject ? '编辑项目' : '创建项目'}
-          eyebrow="360 Review Project"
+          title={editingProjectId ? '编辑项目' : '创建项目'}
+          eyebrow="项目中心是唯一的项目创建入口"
         >
           <form className="grid gap-4" onSubmit={handleProjectSubmit}>
             <Field label="项目名称">
@@ -6077,6 +7785,66 @@ export default function App() {
                 }
                 placeholder="例如：2026 年中层管理者 360 评审"
                 required
+              />
+            </Field>
+            <div className="grid gap-4 md:grid-cols-2">
+              <Field label="诊断场景">
+                <select
+                  className={inputClass}
+                  value={projectForm.project_type}
+                  onChange={(event) =>
+                    setProjectForm({
+                      ...projectForm,
+                      project_type: event.target.value as Project['project_type'],
+                    })
+                  }
+                >
+                  <option value="combined">综合组织诊断</option>
+                  <option value="org_diagnosis">组织诊断</option>
+                  <option value="review_360">360 评审</option>
+                </select>
+              </Field>
+              <Field label="项目状态">
+                <select
+                  className={inputClass}
+                  value={projectForm.status}
+                  onChange={(event) =>
+                    setProjectForm({
+                      ...projectForm,
+                      status: event.target.value as Project['status'],
+                    })
+                  }
+                >
+                  <option value="draft">草稿</option>
+                  <option value="active">进行中</option>
+                  <option value="completed">已完成</option>
+                </select>
+              </Field>
+            </div>
+            <Field label="项目说明">
+              <textarea
+                className={textareaClass}
+                value={projectForm.description}
+                onChange={(event) =>
+                  setProjectForm({
+                    ...projectForm,
+                    description: event.target.value,
+                  })
+                }
+                placeholder="说明本次组织诊断的背景、业务场景和预期成果。"
+              />
+            </Field>
+            <Field label="诊断目标">
+              <textarea
+                className={textareaClass}
+                value={projectForm.purpose}
+                onChange={(event) =>
+                  setProjectForm({
+                    ...projectForm,
+                    purpose: event.target.value,
+                  })
+                }
+                placeholder="例如：识别跨部门协同效率下降的关键原因，并形成可执行的改进行动。"
               />
             </Field>
             <div className="grid gap-4 md:grid-cols-2">
@@ -6107,30 +7875,16 @@ export default function App() {
                 />
               </Field>
             </div>
-            <Field label="评审目的">
-              <select
-                className={inputClass}
-                value={projectForm.purpose}
-                onChange={(event) =>
-                  setProjectForm({
-                    ...projectForm,
-                    purpose: event.target.value,
-                  })
-                }
-              >
-                {purposeOptions.map((purpose) => (
-                  <option key={purpose} value={purpose}>
-                    {purpose}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="对象范围">
+            <Field label="参与对象">
               <textarea
                 className={textareaClass}
                 value={projectForm.scope}
                 onChange={(event) =>
-                  setProjectForm({ ...projectForm, scope: event.target.value })
+                  setProjectForm({
+                    ...projectForm,
+                    scope: event.target.value,
+                    target_scope: event.target.value,
+                  })
                 }
                 placeholder="例如：总部 P6-P8 管理者，覆盖产品、研发、销售和职能团队"
               />
@@ -6149,29 +7903,48 @@ export default function App() {
               />
               <span>
                 <span className="block text-sm font-bold text-slate-900">
-                  匿名评审
+                  匿名收集
                 </span>
                 <span className="mt-1 block text-xs leading-5 text-slate-500">
-                  开启后，少于 3 人的评价群体不单独展示原始评论。
+                  开启后，少于 3 人的群体不单独展示原始评论，帮助员工更安心表达。
                 </span>
               </span>
             </label>
             <div className="flex flex-wrap items-center gap-2">
               <Button type="submit" disabled={busy}>
                 <Save size={16} />
-                {currentProject ? '保存项目' : '创建项目'}
+                {editingProjectId ? '保存项目' : '创建项目'}
               </Button>
               <Button
                 type="button"
                 variant="secondary"
                 onClick={() => {
                   setProjectId(null);
+                  setEditingProjectId(null);
                   setProjectForm(blankProject);
                 }}
               >
                 <Plus size={16} />
                 新建草稿
               </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={!currentProject}
+                onClick={() => currentProject && setEditingProjectId(currentProject.id)}
+              >
+                编辑当前项目
+              </Button>
+              {currentProject ? (
+                <Button
+                  type="button"
+                  variant="danger"
+                  onClick={() => void handleDeleteProject(currentProject)}
+                >
+                  <Trash2 size={16} />
+                  删除当前项目
+                </Button>
+              ) : null}
             </div>
           </form>
         </Panel>
@@ -6201,7 +7974,7 @@ export default function App() {
                   placeholder="OpenAI-compatible 模型调用凭证"
                 />
               </Field>
-              <Field label="Base URL">
+              <Field label="模型服务地址">
                 <input
                   className={inputClass}
                   value={aiForm.base_url}
@@ -6210,7 +7983,7 @@ export default function App() {
                   }
                 />
               </Field>
-              <Field label="Model">
+              <Field label="模型名称">
                 <input
                   className={inputClass}
                   value={aiForm.model}
@@ -6237,7 +8010,10 @@ export default function App() {
                         ? 'border-sky-300 bg-sky-50'
                         : 'border-slate-200 bg-white hover:bg-slate-50'
                     }`}
-                    onClick={() => setProjectId(project.id)}
+                    onClick={() => {
+                      setProjectId(project.id);
+                      setNotice(`已切换到项目「${project.name}」`);
+                    }}
                   >
                     <p className="font-bold text-slate-900">{project.name}</p>
                     <p className="mt-1 text-xs text-slate-500">
@@ -6250,7 +8026,111 @@ export default function App() {
             ) : (
               <EmptyState
                 title="暂无项目"
-                body="填写左侧表单即可创建第一个评审项目。"
+                body="请在项目中心创建第一个诊断项目。创建后，诊断维度、问卷、反馈、报告都会按项目隔离保存。"
+              />
+            )}
+          </Panel>
+          <Panel title="项目列表与操作">
+            {projects.length ? (
+              <div className="grid gap-3">
+                {projects.map((project) => (
+                  <article
+                    key={project.id}
+                    className={`rounded-lg border p-4 ${
+                      project.id === projectId
+                        ? 'border-sky-300 bg-sky-50'
+                        : 'border-slate-200 bg-white'
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="font-black text-slate-950">
+                          {project.name}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {projectTypeLabels[project.project_type]} ·{' '}
+                          {displayStatus(project.status)}
+                        </p>
+                      </div>
+                      {project.id === projectId ? (
+                        <span className="rounded-lg bg-sky-100 px-2 py-1 text-xs font-bold text-sky-700">
+                          当前项目
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-2 text-sm leading-6 text-slate-600">
+                      {project.description ||
+                        project.purpose ||
+                        project.scope ||
+                        '暂无项目说明'}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      参与对象：{project.scope || project.target_scope || '未填写'}
+                    </p>
+                    <div className="mt-3 grid gap-2 rounded-xl border border-slate-200/80 bg-white/70 p-3 text-xs leading-5 text-slate-600 md:grid-cols-2">
+                      <p>
+                        <span className="font-semibold text-slate-800">诊断目标：</span>
+                        {project.purpose || '未填写'}
+                      </p>
+                      <p>
+                        <span className="font-semibold text-slate-800">创建时间：</span>
+                        {project.created_at || '未记录'}
+                      </p>
+                      <p>
+                        <span className="font-semibold text-slate-800">更新时间：</span>
+                        {project.updated_at || '未记录'}
+                      </p>
+                      <p>
+                        <span className="font-semibold text-slate-800">当前状态：</span>
+                        {displayStatus(project.status)}
+                      </p>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => {
+                          setProjectId(project.id);
+                          setNotice(`已切换到项目「${project.name}」`);
+                        }}
+                      >
+                        设为当前项目
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => {
+                          setProjectId(project.id);
+                          setEditingProjectId(project.id);
+                        }}
+                      >
+                        编辑
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => {
+                          setProjectId(project.id);
+                          setEditingProjectId(project.id);
+                        }}
+                      >
+                        查看详情
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="danger"
+                        onClick={() => void handleDeleteProject(project)}
+                      >
+                        删除
+                      </Button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <EmptyState
+                title="暂无项目"
+                body="请在项目中心填写左侧表单创建第一个诊断项目。"
               />
             )}
           </Panel>
@@ -6260,6 +8140,7 @@ export default function App() {
   }
 
   function renderQuestionnairePage() {
+    const questionnaireDimensions = questionnaire.dimensions ?? [];
     const confirmedHypotheses = diagnosisList.filter(
       (item) => item.status === 'confirmed',
     );
@@ -6268,15 +8149,51 @@ export default function App() {
     );
     return requireProject(
       <div className="grid gap-4">
+        <Panel title="问卷如何承接诊断设计" eyebrow="证据收集说明">
+          <div className="grid gap-4 text-sm leading-6 text-slate-700">
+            <p>
+              组织诊断假设回答：“当前组织可能出了什么问题？”组织能力维度回答：“我们从哪些组织能力角度观察问题？”胜任力模型回答：“解决这些组织问题，需要管理者和员工具备哪些能力与行为？”诊断问卷回答：“我们如何收集证据，验证这些假设和能力差距？”
+            </p>
+            <p>
+              问卷不是独立功能，而是证据收集工具。系统会把已确认的诊断假设、组织能力维度和胜任力模型转化为可填写的问题，用来支持后续的数据洞察、AI 专家诊断会、诊断报告和行动计划。
+            </p>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="rounded-lg bg-slate-50 p-3">
+                <p className="font-bold text-slate-950">组织诊断题</p>
+                <p>验证组织问题和组织能力维度。</p>
+              </div>
+              <div className="rounded-lg bg-slate-50 p-3">
+                <p className="font-bold text-slate-950">胜任力题</p>
+                <p>验证能力标准和行为表现。</p>
+              </div>
+              <div className="rounded-lg bg-slate-50 p-3">
+                <p className="font-bold text-slate-950">360 评审题</p>
+                <p>收集多视角反馈。</p>
+              </div>
+              <div className="rounded-lg bg-slate-50 p-3">
+                <p className="font-bold text-slate-950">开放反馈题</p>
+                <p>收集真实描述和补充信息。</p>
+              </div>
+            </div>
+            <div className="rounded-lg border border-sky-100 bg-sky-50 p-3 text-sky-900">
+              生成顺序：选择问题来源 → 选择目标对象 → 选择问卷长度 → 生成问卷 → 预览与编辑 → 保存到问卷中心。
+            </div>
+          </div>
+        </Panel>
+        <Panel title="证据收集方案" eyebrow="证据收集方案">
+          <p className="text-sm leading-6 text-slate-600">
+            问卷不是独立功能，而是证据收集方案的一部分。一个问卷可以同时包含组织诊断问题、人才/胜任力模型问题、360评审问题和开放反馈问题；生成后统一进入问卷中心，按当前 project_id 隔离管理。
+          </p>
+        </Panel>
         <Panel
           title="AI 生成胜任力模型"
-          eyebrow="Competency Model"
+          eyebrow="胜任力模型"
           actions={
             <>
               <Button
                 variant="secondary"
                 onClick={handleInspectQuestionnaire}
-                disabled={busy || !questionnaire.dimensions.length}
+                disabled={busy || !questionnaireDimensions.length}
               >
                 <AlertTriangle size={16} />
                 检查题目
@@ -6313,13 +8230,13 @@ export default function App() {
           </div>
           <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-900">
             AI 仅生成发展反馈草稿，不直接决定晋升、淘汰或薪酬。问卷与报告都需要
-            HR 人工确认。
+            管理员确认。
           </div>
         </Panel>
 
         <Panel
           title="AI 时代诊断问卷生成"
-          eyebrow="Diagnosis + Talent Model"
+          eyebrow="组织诊断与胜任力模型"
           actions={
             <Button
               onClick={handleGenerateQuestionnaireFromModel}
@@ -6335,7 +8252,7 @@ export default function App() {
           }
         >
           <p className="text-sm leading-6 text-slate-600">
-            基于 HR 已确认的诊断假设和 AI
+            基于管理员已确认的诊断假设和 AI
             时代人才模型，生成更贴合公司真实问题的评分题、行为观察题和开放题。
           </p>
           <div className="mt-4 grid gap-4 md:grid-cols-2">
@@ -6379,7 +8296,7 @@ export default function App() {
                 <option value="">请选择已保存人才模型</option>
                 {availableTalentModels.map((model) => (
                   <option key={model.id} value={model.id}>
-                    {model.name} · {model.status}
+                    {model.name} · {displayStatus(model.status)}
                   </option>
                 ))}
               </select>
@@ -6471,7 +8388,7 @@ export default function App() {
             </div>
           </div>
 
-          {modelGeneratedQuestions.length ? (
+          {false && modelGeneratedQuestions.length ? (
             <div className="mt-5 grid gap-3">
               <p className="text-sm font-bold text-slate-900">
                 最近一次基于模型生成的问题
@@ -6482,14 +8399,14 @@ export default function App() {
                   className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm"
                 >
                   <p className="font-bold text-slate-950">
-                    维度：{question.dimension_name} · 题型：
+                    维度：{question.dimension_name} / 题型：{' '}
                     {question.question_type}
                   </p>
                   <p className="mt-1 text-slate-700">
                     题目：{question.content}
                   </p>
                   <p className="mt-1 text-slate-500">
-                    适用评价关系：{question.relation_scope}
+                    评价关系：{question.relation_scope}
                   </p>
                   {question.open_followup ? (
                     <p className="mt-1 text-slate-500">
@@ -6512,7 +8429,7 @@ export default function App() {
               </Button>
               <Button
                 onClick={handleSaveQuestionnaire}
-                disabled={busy || !questionnaire.dimensions.length}
+                disabled={busy || !questionnaireDimensions.length}
               >
                 <Save size={16} />
                 保存问卷
@@ -6520,9 +8437,9 @@ export default function App() {
             </>
           }
         >
-          {questionnaire.dimensions.length ? (
+          {questionnaireDimensions.length ? (
             <div className="grid gap-4">
-              {questionnaire.dimensions.map((dimension, dimensionIndex) => (
+              {questionnaireDimensions.map((dimension, dimensionIndex) => (
                 <div
                   key={dimension.id ?? dimensionIndex}
                   className="rounded-lg border border-slate-200 bg-slate-50 p-4"
@@ -6622,7 +8539,23 @@ export default function App() {
                             </select>
                           </Field>
                         </div>
-                        <div className="grid gap-3 md:grid-cols-2 lg:col-span-3">
+                        <div className="grid gap-3 md:grid-cols-4 lg:col-span-3">
+                          <Field label="问题来源">
+                            <select
+                              className={inputClass}
+                              value={question.source_type ?? 'manual'}
+                              onChange={(event) =>
+                                updateQuestion(dimensionIndex, questionIndex, {
+                                  source_type: event.target.value,
+                                })
+                              }
+                            >
+                              <option value="manual">手动添加</option>
+                              <option value="hypothesis">组织诊断</option>
+                              <option value="talent_model">胜任力模型</option>
+                              <option value="ai_model">胜任力模型</option>
+                            </select>
+                          </Field>
                           <Field label="题目类型">
                             <select
                               className={inputClass}
@@ -6654,6 +8587,18 @@ export default function App() {
                               }
                             />
                           </Field>
+                          <label className="flex items-center gap-2 self-end text-sm font-semibold text-slate-700">
+                            <input
+                              type="checkbox"
+                              checked={question.required ?? true}
+                              onChange={(event) =>
+                                updateQuestion(dimensionIndex, questionIndex, {
+                                  required: event.target.checked,
+                                })
+                              }
+                            />
+                            必填
+                          </label>
                         </div>
                         <Button
                           variant="ghost"
@@ -6715,7 +8660,7 @@ export default function App() {
     return requireProject(
       <div className="grid gap-4 xl:grid-cols-[minmax(320px,0.75fr)_minmax(0,1.25fr)]">
         <div className="grid gap-4">
-          <Panel title="手动录入员工" eyebrow="Employee">
+          <Panel title="手动录入员工" eyebrow="员工管理">
             <form className="grid gap-3" onSubmit={handleCreateEmployee}>
               <Field label="姓名">
                 <input
@@ -7088,7 +9033,7 @@ export default function App() {
         >
           {selectedAssignment && questions.length ? (
             <form className="grid gap-5" onSubmit={handleSubmitResponse}>
-              {questionnaire.dimensions.map((dimension) => (
+              {(questionnaire.dimensions ?? []).map((dimension) => (
                 <div
                   key={dimension.id ?? dimension.name}
                   className="grid gap-3"
@@ -7413,7 +9358,7 @@ export default function App() {
       <div className="grid gap-4">
         <Panel
           title="个人 360 报告"
-          eyebrow="HR Confirmation Required"
+          eyebrow="管理员确认"
           actions={
             <>
               <select
@@ -7461,7 +9406,7 @@ export default function App() {
                     <span
                       className={`mt-2 inline-flex rounded-full px-2 py-1 text-xs font-bold ${report.status === 'confirmed' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}
                     >
-                      {report.status === 'confirmed' ? 'HR 已确认' : '待确认'}
+                      {report.status === 'confirmed' ? '管理员已确认' : '待确认'}
                     </span>
                   </button>
                 ))
@@ -7494,7 +9439,7 @@ export default function App() {
                   disabled={busy || !selectedReport}
                 >
                   <ShieldCheck size={16} />
-                  HR 确认报告
+                  管理员确认报告
                 </Button>
               </div>
             </div>
@@ -7559,7 +9504,7 @@ export default function App() {
                         {entry.entity_type}
                       </p>
                       <p>
-                        {entry.editor || 'HR'} · {entry.created_at}
+                        {entry.editor || '管理员'} · {entry.created_at}
                       </p>
                     </div>
                   ))}
@@ -7586,7 +9531,7 @@ export default function App() {
   };
 
   if (activeModule === 'home') {
-    return renderHomePage();
+    return renderHomePageClean();
   }
   if (activeModule === 'login') {
     return renderLoginPage();
@@ -7596,9 +9541,6 @@ export default function App() {
   }
   if (activeModule === 'projectWorkspace') {
     return renderProjectWorkspacePage();
-  }
-  if (activeModule === 'createProject') {
-    return renderCreateProjectPage();
   }
   if (activeModule === 'organizationDiagnosis') {
     return renderOrganizationDiagnosisOSPage();
@@ -7613,7 +9555,7 @@ export default function App() {
     return renderResponseTrackingPage();
   }
   if (activeModule === 'dashboard') {
-    if (currentUser?.role === 'boss') return renderExecutiveDashboardPage();
+    if (currentUser?.role === 'admin') return renderExecutiveDashboardPage();
     if (currentUser?.role === 'employee') return renderMyTasksPage();
     return renderOrganizationDiagnosisOSPage();
   }
@@ -7659,6 +9601,9 @@ export default function App() {
   if (activeModule === 'diagnosisReports') {
     return renderDiagnosisReportsPage();
   }
+  if (activeModule === 'expertCouncil') {
+    return renderExpertCouncilPageClean();
+  }
   if (!currentUser) {
     return renderLoginPage();
   }
@@ -7668,13 +9613,13 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900">
-      {renderGlobalTopNav()}
+      {renderGlobalTopNavClean()}
       <div className="flex min-h-screen">
         <aside className="hidden w-72 border-r border-slate-200 bg-white px-4 py-5 lg:block">
           <div className="flex items-center gap-3 rounded-lg bg-slate-950 px-3 py-3 text-white">
             <Activity size={22} />
             <div className="min-w-0">
-              <p className="truncate text-sm font-black">hr-ai-consulting</p>
+              <p className="truncate text-sm font-black">组织发展诊断平台</p>
               <p className="text-xs text-slate-300">360评审 Agent</p>
             </div>
           </div>
@@ -7698,7 +9643,7 @@ export default function App() {
               onClick={() => goModule('diagnosis')}
             >
               <Bot size={18} />
-              HR诊断假设
+                诊断假设
             </button>
             <button
               className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-slate-600 hover:bg-slate-100 hover:text-slate-950"
