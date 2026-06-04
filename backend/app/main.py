@@ -254,6 +254,8 @@ class TalentModelGeneratePayload(BaseModel):
     project_id: int | None = None
     hypothesis_id: int
     template: str = "AI-native Manager Model"
+    target_role: str = ""
+    target_level: str = ""
 
 
 class QuestionnaireFromModelPayload(BaseModel):
@@ -623,7 +625,7 @@ def current_user(authorization: str | None) -> dict[str, Any]:
 def require_admin_user(authorization: str | None) -> dict[str, Any]:
     user = current_user(authorization)
     if not role_is_hr(user["role"]):
-        raise HTTPException(status_code=403, detail="hr only")
+        raise HTTPException(status_code=403, detail="admin only")
     return user
 
 
@@ -877,7 +879,7 @@ def fallback_question_issues(questionnaire: list[dict[str, Any]]) -> list[dict[s
             if any(word in text for word in leading_words):
                 issues.append({"type": "诱导性", "question": text, "suggestion": "去掉价值判断词，避免暗示评价人必须给高分或低分。"})
     if not issues:
-        issues.append({"type": "通过", "question": "当前问卷", "suggestion": "未发现明显重复、抽象或诱导性表述，建议 HR 结合岗位语境再复核。"})
+        issues.append({"type": "通过", "question": "当前问卷", "suggestion": "未发现明显重复、抽象或诱导性表述，建议管理员结合岗位语境再复核。"})
     return issues
 
 
@@ -1214,9 +1216,9 @@ def fallback_report(packet: dict[str, Any]) -> str:
     risks = "、".join([f"{row['name']}({row['avg_score']})" for row in low]) or "暂无"
     withheld_count = sum(1 for group in packet["comments_by_relation"] if group["withheld"])
 
-    return f"""# {employee['name']} 360 反馈报告（HR 待确认）
+    return f"""# {employee['name']} 360 反馈报告（管理员待确认）
 
-> 本报告用于发展反馈与辅导，不得直接作为晋升、淘汰或薪酬决策依据。所有结论需要 HR 人工确认。
+> 本报告用于发展反馈与辅导，不得直接作为晋升、淘汰或薪酬决策依据。所有结论需要管理员人工确认。
 
 ## 核心优势
 当前相对优势集中在：{strengths}。建议在面谈中追问这些优势对应的具体场景，沉淀可复用行为。
@@ -1232,7 +1234,7 @@ def fallback_report(packet: dict[str, Any]) -> str:
 - 60 天：在真实工作场景中邀请至少 2 位相关方进行中途反馈。
 - 90 天：复盘行为变化证据，并更新下一轮发展目标。
 
-## HR 反馈面谈提纲
+## 管理员反馈面谈提纲
 - 先确认被评人对评分和反馈主题的理解。
 - 讨论自评与他评差距背后的具体场景。
 - 共同选择不超过 2 个发展重点，明确支持资源和复盘时间。
@@ -1245,12 +1247,12 @@ def fallback_org_diagnosis(analytics: dict[str, Any]) -> str:
         key=lambda row: row["avg_score"],
     )[:3]
     low_text = "、".join([f"{row['name']}({row['avg_score']})" for row in lowest_dimensions]) or "暂无足够评分"
-    return f"""# 组织层面诊断摘要（HR 待确认）
+    return f"""# 组织层面诊断摘要（管理员待确认）
 
 当前项目完成率为 {analytics['completion_rate']}%，覆盖 {analytics['employee_count']} 名员工、{analytics['relationships_count']} 条评价关系。该摘要只用于组织发展诊断，不得直接用于个人晋升、淘汰或薪酬决策。
 
 ## 初步发现
-相对低分维度集中在：{low_text}。建议 HR 结合业务阶段、部门样本量和近期组织变化进一步访谈验证。
+相对低分维度集中在：{low_text}。建议管理员结合业务阶段、部门样本量和近期组织变化进一步访谈验证。
 
 ## 建议动作
 - 优先补齐未完成评价，避免样本偏差。
@@ -1711,7 +1713,7 @@ AI 使用仍偏个人工具化，任务分工、工作流沉淀和治理机制�
 {', '.join(item['best_fit_tasks'])}
 """
         return title, content
-    title = f"{project['name']} - HR 详细诊断报告"
+    title = f"{project['name']} - 管理员详细诊断报告"
     progress = build_survey_progress(conn, project_id)
     feedback = build_feedback_summary(conn, project_id)
     content = f"""# {title}
@@ -2209,7 +2211,7 @@ def fallback_diagnosis_rules() -> list[dict[str, Any]]:
             "condition_json": {"metric": "self_score_minus_others_score", "operator": ">=", "threshold": 1.0},
             "diagnosis_text": "可能存在自我认知盲区，需要在反馈面谈中结合具体行为证据核对。",
             "risk_level": "medium",
-            "suggested_action": "建议 HR 在反馈面谈中引导被评人对照具体行为案例进行复盘。",
+            "suggested_action": "建议管理员在反馈面谈中引导被评人对照具体行为案例进行复盘。",
             "evidence_sources": ["360评分", "开放反馈"],
         },
         {
@@ -2228,7 +2230,7 @@ def fallback_diagnosis_rules() -> list[dict[str, Any]]:
             "diagnosis_text": "可能不是潜力不足，而是缺少 AI 方法训练和工具场景。",
             "risk_level": "medium",
             "suggested_action": "提供 AI 工作流训练和岗位场景化实践。",
-            "evidence_sources": ["AI人才模型评分", "开放反馈"],
+            "evidence_sources": ["AI胜任力模型评分", "开放反馈"],
         },
         {
             "rule_name": "跨部门协作低且员工反馈中出现审批慢",
@@ -2414,7 +2416,7 @@ def fallback_action_plans(project_id: int, report_id: int | None = None) -> list
         {"project_id": project_id, "report_id": report_id, "target_type": "organization", "title": "制定 AI 使用基本规范并选择试点团队", "description": "明确敏感数据、人工复核、外部工具输入边界，并选择一个业务团队试点 AI 工作流。", "timeline": "30天", "status": "pending", "ai_generated": True},
         {"project_id": project_id, "report_id": report_id, "target_type": "organization", "title": "推动流程改造与管理者 AI 工作流训练", "description": "对管理者开展 AI 工作流设计训练，建立跨部门协作机制和反馈复盘节奏。", "timeline": "60天", "status": "pending", "ai_generated": True},
         {"project_id": project_id, "report_id": report_id, "target_type": "organization", "title": "跟踪员工反馈变化并复盘试点", "description": "跟踪员工反馈主题、任务完成率和关键维度变化，复盘试点团队的流程改造成效。", "timeline": "60天", "status": "pending", "ai_generated": True},
-        {"project_id": project_id, "report_id": report_id, "target_type": "organization", "title": "复测关键维度并扩展成熟机制", "description": "复测关键 360 维度，评估试点效果，更新人才模型并形成长期组织改进计划。", "timeline": "90天", "status": "pending", "ai_generated": True},
+        {"project_id": project_id, "report_id": report_id, "target_type": "organization", "title": "复测关键维度并扩展成熟机制", "description": "复测关键 360 维度，评估试点效果，更新胜任力模型并形成长期组织改进计划。", "timeline": "90天", "status": "pending", "ai_generated": True},
     ]
 
 
@@ -2480,14 +2482,14 @@ def fallback_diagnosis_report(context: dict[str, Any], report_type: str, include
 
 ### 90 天
 - 复测关键维度，评估试点效果。
-- 扩展成熟机制，更新人才模型，形成长期组织改进计划。
+- 扩展成熟机制，更新胜任力模型，形成长期组织改进计划。
 """ if include_action_plan else ""
-    return f"""# {report_type}（HR 待确认）
+    return f"""# {report_type}（管理员待确认）
 
-> 本报告仅用于发展反馈和组织诊断，不作为自动晋升、淘汰、薪酬或裁员决策依据。所有结论需要 HR 结合业务事实进行人工确认。
+> 本报告仅用于发展反馈和组织诊断，不作为自动晋升、淘汰、薪酬或裁员决策依据。所有结论需要管理员结合业务事实进行人工确认。
 
 ## 诊断摘要
-当前项目完成率为 {analytics.get('completion_rate', 0)}%，覆盖 {analytics.get('employee_count', 0)} 名员工。MVP 诊断建议将评分差异、员工声音和 HR 诊断假设合并解读。
+当前项目完成率为 {analytics.get('completion_rate', 0)}%，覆盖 {analytics.get('employee_count', 0)} 名员工。MVP 诊断建议将评分差异、员工声音和管理员诊断假设合并解读。
 
 ## 本次诊断假设
 {context.get('hypothesis', {}).get('ai_extracted_hypotheses', [{'hypothesis_title': '暂无已确认假设'}])[0].get('hypothesis_title', '暂无已确认假设') if context.get('hypothesis') else '暂无已确认假设'}
@@ -2498,7 +2500,7 @@ def fallback_diagnosis_report(context: dict[str, Any], report_type: str, include
 - 组织风险：{risk_text}
 
 ## 评分差异分析
-系统已检查自评与他评、上级与下级、同级与协作方差异。若差异较大，建议 HR 回到具体行为证据，而不是直接下结论。
+系统已检查自评与他评、上级与下级、同级与协作方差异。若差异较大，建议管理员回到具体行为证据，而不是直接下结论。
 
 ## AI 时代人才维度表现
 重点关注问题定义能力、AI 协作能力、判断与验证能力、Agent 调度与协同能力，以及责任与治理意识。
@@ -2520,8 +2522,8 @@ def fallback_diagnosis_report(context: dict[str, Any], report_type: str, include
 - 建立跨部门 RACI 和反馈处理闭环。
 {action_section}
 
-## HR 人工确认区
-- HR 确认人：
+## 管理员人工确认区
+- 管理员确认人：
 - 业务事实补充：
 - 后续复盘时间：
 """
@@ -2655,7 +2657,7 @@ def build_organization_dashboard(conn: Any, project_id: int) -> dict[str, Any]:
             "self_other_gaps": analytics.get("self_other_gaps", []),
             "group_differences": analytics.get("group_differences", []),
             "risk_alerts": analytics.get("risk_alerts", []),
-            "explanation": "差异信号用于提示 HR 回到行为证据和访谈验证，不直接形成自动人事结论。",
+            "explanation": "差异信号用于提示管理员回到行为证据和访谈验证，不直接形成自动人事结论。",
         },
         "employee_voice": clusters,
         "organization_risks": risks,
@@ -2750,7 +2752,7 @@ def list_projects(authorization: str | None = Header(default=None)) -> list[dict
 def create_project(payload: ProjectPayload, authorization: str | None = Header(default=None)) -> dict[str, Any]:
     user = optional_current_user(authorization)
     if user and user["role"] == "employee":
-        raise HTTPException(status_code=403, detail="hr only")
+        raise HTTPException(status_code=403, detail="admin only")
     description = payload.description or payload.purpose
     target_scope = payload.target_scope or payload.scope
     with get_connection() as conn:
@@ -2813,7 +2815,7 @@ def get_project(project_id: int) -> dict[str, Any]:
 def update_project(project_id: int, payload: ProjectPayload, authorization: str | None = Header(default=None)) -> dict[str, Any]:
     user = optional_current_user(authorization)
     if user and user["role"] == "employee":
-        raise HTTPException(status_code=403, detail="hr only")
+        raise HTTPException(status_code=403, detail="admin only")
     description = payload.description or payload.purpose
     target_scope = payload.target_scope or payload.scope
     with get_connection() as conn:
@@ -2958,8 +2960,9 @@ def create_diagnosis_hypothesis(
 ) -> dict[str, Any]:
     user = require_admin_user(authorization)
     with get_connection() as conn:
-        if payload.project_id:
-            fetch_one_or_404(conn, "SELECT id FROM projects WHERE id = ?", (payload.project_id,), "project")
+        if payload.project_id is None:
+            raise HTTPException(status_code=400, detail="project_id is required")
+        fetch_one_or_404(conn, "SELECT id FROM projects WHERE id = ?", (payload.project_id,), "project")
         cur = conn.execute(
             """
             INSERT INTO diagnosis_hypotheses
@@ -2989,11 +2992,37 @@ def create_diagnosis_hypothesis(
 
 
 @app.get("/api/diagnosis/hypotheses")
-def list_diagnosis_hypotheses(authorization: str | None = Header(default=None)) -> list[dict[str, Any]]:
+def list_diagnosis_hypotheses(
+    project_id: int | None = None,
+    status: Literal["draft", "generated", "confirmed"] | None = None,
+    authorization: str | None = Header(default=None),
+) -> list[dict[str, Any]]:
     require_admin_user(authorization)
     with get_connection() as conn:
-        rows = conn.execute("SELECT * FROM diagnosis_hypotheses ORDER BY updated_at DESC, id DESC").fetchall()
+        where: list[str] = []
+        params: list[Any] = []
+        if project_id is not None:
+            fetch_one_or_404(conn, "SELECT id FROM projects WHERE id = ?", (project_id,), "project")
+            where.append("project_id = ?")
+            params.append(project_id)
+        if status:
+            where.append("status = ?")
+            params.append(status)
+        query = "SELECT * FROM diagnosis_hypotheses"
+        if where:
+            query += " WHERE " + " AND ".join(where)
+        query += " ORDER BY updated_at DESC, id DESC"
+        rows = conn.execute(query, tuple(params)).fetchall()
         return [serialize_diagnosis(row) for row in rows]
+
+
+@app.get("/api/projects/{project_id}/diagnosis-hypotheses")
+def list_project_diagnosis_hypotheses(
+    project_id: int,
+    status: Literal["draft", "generated", "confirmed"] | None = None,
+    authorization: str | None = Header(default=None),
+) -> list[dict[str, Any]]:
+    return list_diagnosis_hypotheses(project_id=project_id, status=status, authorization=authorization)
 
 
 @app.get("/api/diagnosis/hypotheses/{hypothesis_id}")
@@ -3016,6 +3045,9 @@ def update_diagnosis_hypothesis(
     require_admin_user(authorization)
     with get_connection() as conn:
         before = fetch_one_or_404(conn, "SELECT * FROM diagnosis_hypotheses WHERE id = ?", (hypothesis_id,), "diagnosis hypothesis")
+        if payload.project_id is None:
+            raise HTTPException(status_code=400, detail="project_id is required")
+        fetch_one_or_404(conn, "SELECT id FROM projects WHERE id = ?", (payload.project_id,), "project")
         conn.execute(
             """
             UPDATE diagnosis_hypotheses
@@ -3050,11 +3082,13 @@ def generate_diagnosis_hypotheses(
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
     user = require_admin_user(authorization)
+    if payload.project_id is None:
+        raise HTTPException(status_code=400, detail="project_id is required")
     system = "你是资深组织诊断与 AI 时代人才评估顾问，只输出可解析 JSON。"
     prompt = f"""
-请根据 HR 输入提炼结构化诊断假设，输出 JSON：{{"hypotheses":[{{"hypothesis_title":"","hypothesis_detail":"","problem_type":"manager","suggested_validation_method":"","suggested_data_sources":[],"related_talent_dimensions":[]}}]}}。
+请根据管理员输入提炼结构化诊断假设，输出 JSON：{{"hypotheses":[{{"hypothesis_title":"","hypothesis_detail":"","problem_type":"manager","suggested_validation_method":"","suggested_data_sources":[],"related_talent_dimensions":[]}}]}}。
 problem_type 只能是 individual、manager、organization、ai_transformation、governance。
-HR 输入：
+管理员输入：
 {dumps(payload.model_dump())}
 约束：AI 输出仅用于发展反馈和组织诊断，不得作为自动晋升、淘汰、薪酬或裁员决策依据。
 """
@@ -3067,6 +3101,7 @@ HR 输入：
         ai_text = dumps({"hypotheses": hypotheses, "fallback_reason": error or "AI output could not be parsed."})
 
     with get_connection() as conn:
+        fetch_one_or_404(conn, "SELECT id FROM projects WHERE id = ?", (payload.project_id,), "project")
         run_id = record_ai_run(
             conn,
             payload.project_id,
@@ -3079,13 +3114,19 @@ HR 输入：
             created_by=user["id"],
         )
         if payload.id:
+            fetch_one_or_404(
+                conn,
+                "SELECT id FROM diagnosis_hypotheses WHERE id = ? AND project_id = ?",
+                (payload.id, payload.project_id),
+                "diagnosis hypothesis",
+            )
             conn.execute(
                 """
                 UPDATE diagnosis_hypotheses
                 SET ai_extracted_hypotheses = ?, status = 'generated', updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
+                WHERE id = ? AND project_id = ?
                 """,
-                (dumps(hypotheses), payload.id),
+                (dumps(hypotheses), payload.id, payload.project_id),
             )
             row = fetch_one_or_404(conn, "SELECT * FROM diagnosis_hypotheses WHERE id = ?", (payload.id,), "diagnosis hypothesis")
             result = serialize_diagnosis(row)
@@ -3103,7 +3144,9 @@ def confirm_diagnosis_hypothesis(
 ) -> dict[str, Any]:
     require_admin_user(authorization)
     with get_connection() as conn:
-        fetch_one_or_404(conn, "SELECT * FROM diagnosis_hypotheses WHERE id = ?", (hypothesis_id,), "diagnosis hypothesis")
+        row_before = fetch_one_or_404(conn, "SELECT * FROM diagnosis_hypotheses WHERE id = ?", (hypothesis_id,), "diagnosis hypothesis")
+        if row_before["project_id"] is None:
+            raise HTTPException(status_code=400, detail="diagnosis hypothesis must belong to a project")
         conn.execute(
             "UPDATE diagnosis_hypotheses SET status = 'confirmed', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (hypothesis_id,),
@@ -3130,16 +3173,49 @@ def generate_talent_model(
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
     user = require_admin_user(authorization)
+    if payload.project_id is None:
+        raise HTTPException(status_code=400, detail="project_id is required")
     with get_connection() as conn:
-        hypothesis = serialize_diagnosis(
-            fetch_one_or_404(conn, "SELECT * FROM diagnosis_hypotheses WHERE id = ?", (payload.hypothesis_id,), "diagnosis hypothesis")
+        project_id = ensure_project_id(conn, payload.project_id)
+        project = serialize_project(
+            fetch_one_or_404(conn, "SELECT * FROM projects WHERE id = ?", (project_id,), "project")
         )
-    system = "你是 AI 时代人才模型与组织发展专家，只输出可解析 JSON。"
+        hypothesis = serialize_diagnosis(
+            fetch_one_or_404(
+                conn,
+                "SELECT * FROM diagnosis_hypotheses WHERE id = ? AND project_id = ?",
+                (payload.hypothesis_id, project_id),
+                "diagnosis hypothesis",
+            )
+        )
+        if hypothesis["status"] != "confirmed":
+            raise HTTPException(status_code=400, detail="diagnosis hypothesis must be confirmed before generating a talent model")
+        confirmed_hypotheses = [
+            serialize_diagnosis(row)
+            for row in conn.execute(
+                """
+                SELECT * FROM diagnosis_hypotheses
+                WHERE project_id = ? AND status = 'confirmed'
+                ORDER BY updated_at DESC, id DESC
+                """,
+                (project_id,),
+            ).fetchall()
+        ]
+        organization_dimensions = fetch_org_diagnosis_dimensions(conn, project_id)
+    system = "你是 AI 时代胜任力模型与组织发展专家，只输出可解析 JSON。"
     prompt = f"""
-请基于以下诊断假设生成 AI 时代人才模型。输出 JSON：{{"model":{{"name":"","description":"","dimensions":[{{"name":"","description":"","low_behavior":"","medium_behavior":"","high_behavior":"","applicable_roles":"","weight":1.0,"sample_rating_questions":[],"sample_open_questions":[]}}]}}}}。
+请基于当前项目诊断上下文生成 AI 时代胜任力模型。输出 JSON：{{"model":{{"name":"","description":"","dimensions":[{{"name":"","description":"","low_behavior":"","medium_behavior":"","high_behavior":"","applicable_roles":"","weight":1.0,"sample_rating_questions":[],"sample_open_questions":[]}}]}}}}。
+当前项目名称：{project['name']}
+当前项目诊断目标：{project.get('purpose') or project.get('description') or ''}
 模型模板：{payload.template}
-诊断假设：
+目标岗位：{payload.target_role or hypothesis.get('target_talent') or project.get('target_scope') or '管理者'}
+目标层级：{payload.target_level or hypothesis.get('target_scope') or '管理者'}
+本次选中的已确认诊断假设：
 {dumps(hypothesis)}
+当前项目全部已确认诊断假设：
+{dumps(confirmed_hypotheses)}
+当前项目组织能力维度：
+{dumps(organization_dimensions)}
 要求：维度 6-10 个，包含低/中/高行为标准和样例题目，不输出自动人事决策建议。
 """
     ai_text, used_fallback, error = chat_completion(system, prompt)
@@ -3151,7 +3227,7 @@ def generate_talent_model(
         ai_text = dumps({"model": model, "fallback_reason": error or "AI output could not be parsed."})
 
     model.update({
-        "project_id": payload.project_id or hypothesis.get("project_id"),
+        "project_id": project_id,
         "hypothesis_id": payload.hypothesis_id,
         "status": "draft",
         "source_type": "ai_generated",
@@ -3159,11 +3235,16 @@ def generate_talent_model(
     with get_connection() as conn:
         run_id = record_ai_run(
             conn,
-            model.get("project_id"),
+            project_id,
             None,
             "generate_talent_model",
             prompt,
-            payload.model_dump(),
+            {
+                **payload.model_dump(),
+                "project": project,
+                "confirmed_hypotheses": confirmed_hypotheses,
+                "organization_dimensions": organization_dimensions,
+            },
             ai_text or dumps({"model": model}),
             used_fallback,
             created_by=user["id"],
@@ -3178,6 +3259,16 @@ def create_talent_model(
 ) -> dict[str, Any]:
     user = require_admin_user(authorization)
     with get_connection() as conn:
+        if payload.project_id is None:
+            raise HTTPException(status_code=400, detail="project_id is required")
+        fetch_one_or_404(conn, "SELECT id FROM projects WHERE id = ?", (payload.project_id,), "project")
+        if payload.hypothesis_id is not None:
+            fetch_one_or_404(
+                conn,
+                "SELECT id FROM diagnosis_hypotheses WHERE id = ? AND project_id = ?",
+                (payload.hypothesis_id, payload.project_id),
+                "diagnosis hypothesis",
+            )
         cur = conn.execute(
             """
             INSERT INTO talent_models
@@ -3230,16 +3321,27 @@ def create_talent_model(
 
 
 @app.get("/api/talent/models")
-def list_talent_models(authorization: str | None = Header(default=None)) -> list[dict[str, Any]]:
+def list_talent_models(
+    project_id: int | None = None,
+    authorization: str | None = Header(default=None),
+) -> list[dict[str, Any]]:
     require_admin_user(authorization)
     with get_connection() as conn:
+        params: list[Any] = []
+        where = ""
+        if project_id is not None:
+            fetch_one_or_404(conn, "SELECT id FROM projects WHERE id = ?", (project_id,), "project")
+            where = "WHERE tm.project_id = ?"
+            params.append(project_id)
         rows = conn.execute(
-            """
+            f"""
             SELECT tm.*, dh.ai_extracted_hypotheses
             FROM talent_models tm
             LEFT JOIN diagnosis_hypotheses dh ON dh.id = tm.hypothesis_id
+            {where}
             ORDER BY tm.updated_at DESC, tm.id DESC
-            """
+            """,
+            tuple(params),
         ).fetchall()
         result = []
         for row in rows:
@@ -3247,6 +3349,14 @@ def list_talent_models(authorization: str | None = Header(default=None)) -> list
             item["dimension_count"] = len(item["dimensions"])
             result.append(item)
         return result
+
+
+@app.get("/api/projects/{project_id}/talent-models")
+def list_project_talent_models(
+    project_id: int,
+    authorization: str | None = Header(default=None),
+) -> list[dict[str, Any]]:
+    return list_talent_models(project_id=project_id, authorization=authorization)
 
 
 @app.get("/api/talent/models/{model_id}")
@@ -3265,6 +3375,16 @@ def update_talent_model(
     require_admin_user(authorization)
     with get_connection() as conn:
         before = fetch_talent_model(conn, model_id)
+        if payload.project_id is None:
+            raise HTTPException(status_code=400, detail="project_id is required")
+        fetch_one_or_404(conn, "SELECT id FROM projects WHERE id = ?", (payload.project_id,), "project")
+        if payload.hypothesis_id is not None:
+            fetch_one_or_404(
+                conn,
+                "SELECT id FROM diagnosis_hypotheses WHERE id = ? AND project_id = ?",
+                (payload.hypothesis_id, payload.project_id),
+                "diagnosis hypothesis",
+            )
         conn.execute(
             """
             UPDATE talent_models
@@ -3435,16 +3555,16 @@ def generate_questionnaire_from_model(
         )
         model = fetch_talent_model(conn, payload.model_id)
 
-    system = "你是 360 问卷设计专家，熟悉 AI 时代人才模型，只输出可解析 JSON。"
+    system = "你是 360 问卷设计专家，熟悉 AI 时代胜任力模型，只输出可解析 JSON。"
     prompt = f"""
-请基于诊断假设和人才模型生成 360 问卷。输出 JSON：{{"questions":[{{"dimension_name":"","content":"","question_type":"rating","relation_scope":"","rating_type":"1-5","open_followup":"","weight":1.0}}]}}。
+请基于诊断假设和胜任力模型生成 360 问卷。输出 JSON：{{"questions":[{{"dimension_name":"","content":"","question_type":"rating","relation_scope":"","rating_type":"1-5","open_followup":"","weight":1.0}}]}}。
 题型只能从以下列表中选择：{payload.question_types}
 目标对象：{payload.target_level}
 评价关系：{payload.relation_types}
 题目数量：{payload.question_count}
 风控边界：{payload.constraints}
 诊断假设：{dumps(hypothesis)}
-人才模型：{dumps(model)}
+胜任力模型：{dumps(model)}
 """
     ai_text, used_fallback, error = chat_completion(system, prompt)
     parsed = extract_json(ai_text) if ai_text else None
@@ -3488,11 +3608,11 @@ def generate_diagnosis_rules(
             model = fetch_talent_model(conn, payload.model_id)
     system = "你是组织诊断规则设计专家，只输出可解析 JSON。"
     prompt = f"""
-请基于 HR 诊断假设和 AI 人才模型生成诊断规则，输出 JSON：{{"rules":[{{"rule_name":"","condition_type":"","condition_json":{{}},"diagnosis_text":"","risk_level":"medium","suggested_action":"","evidence_sources":[]}}]}}。
+请基于管理员诊断假设和 AI 胜任力模型生成诊断规则，输出 JSON：{{"rules":[{{"rule_name":"","condition_type":"","condition_json":{{}},"diagnosis_text":"","risk_level":"medium","suggested_action":"","evidence_sources":[]}}]}}。
 规则范围：{payload.scopes}
 风控边界：{payload.constraints}
 诊断假设：{dumps(hypothesis)}
-人才模型：{dumps(model)}
+胜任力模型：{dumps(model)}
 """
     ai_text, used_fallback, error = chat_completion(system, prompt)
     parsed = extract_json(ai_text) if ai_text else None
@@ -3923,12 +4043,12 @@ def generate_report(project_id: int, employee_id: int) -> dict[str, Any]:
     with get_connection() as conn:
         packet = employee_review_packet(conn, project_id, employee_id)
 
-    system = "你是资深 HRBP 和组织发展顾问。请用中文生成谨慎、可行动、需要 HR 确认的 360 发展反馈报告。"
+    system = "你是资深组织发展顾问。请用中文生成谨慎、可行动、需要管理员确认的 360 发展反馈报告。"
     prompt = f"""
-请基于以下数据生成个人 360 报告，包含优势、风险、盲区、关键反馈主题、30/60/90 天行动计划和 HR 反馈面谈提纲。
+请基于以下数据生成个人 360 报告，包含优势、风险、盲区、关键反馈主题、30/60/90 天行动计划和管理员反馈面谈提纲。
 硬性限制：
 1. 不能直接决定晋升、淘汰、薪酬。
-2. 必须声明 AI 报告需要 HR 人工确认。
+2. 必须声明 AI 报告需要管理员人工确认。
 3. 当某类评价人少于 3 人时，不引用该群体原始评论。
 4. 对开放文本反馈进行脱敏、归类和总结。
 5. 使用中性、发展导向语言改写尖锐反馈，避免攻击性措辞直接进入报告。
@@ -4024,7 +4144,7 @@ def generate_org_diagnosis(project_id: int) -> dict[str, Any]:
     system = "你是资深组织发展顾问，请生成谨慎、可验证的组织层面 360 诊断摘要。"
     prompt = f"""
 请基于以下 360 项目分析数据生成组织层面诊断摘要，包含组织风险、可能成因、建议访谈验证方向和季度行动建议。
-限制：不能直接决定个人晋升、淘汰、薪酬；所有结论需要 HR 人工确认。
+限制：不能直接决定个人晋升、淘汰、薪酬；所有结论需要管理员人工确认。
 数据：
 {dumps(analytics)}
 """
@@ -4395,7 +4515,7 @@ def project_dashboard(project_id: int, authorization: str | None = Header(defaul
                 "my_growth_suggestion": profile.get("growth_suggestion"),
             }
         if user["role"] == "boss":
-            return {"version": "boss", **build_executive_dashboard(conn, project_id)}
+            return {"version": "organization_admin", **build_executive_dashboard(conn, project_id)}
         return {
             "version": "hr",
             "project_progress": build_survey_progress(conn, project_id),
@@ -4416,7 +4536,7 @@ def executive_dashboard(project_id: int, authorization: str | None = Header(defa
 def generate_os_report(project_id: int, payload: ReportGeneratePayload, authorization: str | None = Header(default=None)) -> dict[str, Any]:
     user = current_user(authorization)
     if payload.report_type == "boss_report" and user["role"] not in {"boss", "hr", "admin"}:
-        raise HTTPException(status_code=403, detail="boss report not allowed")
+            raise HTTPException(status_code=403, detail="organization admin report not allowed")
     if payload.report_type == "hr_report" and not role_is_hr(user["role"]):
         raise HTTPException(status_code=403, detail="hr report not allowed")
     user_id = payload.user_id if role_is_hr(user["role"]) else user["id"]
@@ -4457,7 +4577,7 @@ def get_os_report(project_id: int, report_id: int, authorization: str | None = H
     with get_connection() as conn:
         report = fetch_one_or_404(conn, "SELECT * FROM os_reports WHERE project_id = ? AND id = ?", (project_id, report_id), "report")
         if user["role"] == "boss" and report["report_type"] != "boss_report":
-            raise HTTPException(status_code=403, detail="boss report only")
+            raise HTTPException(status_code=403, detail="organization admin report only")
         if user["role"] == "employee" and (report["report_type"] != "employee_report" or report["user_id"] != user["id"]):
             raise HTTPException(status_code=403, detail="own report only")
         return report
@@ -4937,9 +5057,9 @@ def admin_feedback_ai_summary(feedback_id: int, authorization: str | None = Head
     require_admin_user(authorization)
     with get_connection() as conn:
         feedback = fetch_one_or_404(conn, "SELECT * FROM feedback_items WHERE id = ?", (feedback_id,), "feedback")
-    system = "你是 HR 组织诊断顾问，请用中性、发展导向语言总结员工反馈。"
+    system = "你是组织诊断顾问，请用中性、发展导向语言总结员工反馈。"
     prompt = f"""
-请总结以下员工反馈，输出：反馈主题、可能成因、建议 HR 跟进动作。避免攻击性措辞。
+请总结以下员工反馈，输出：反馈主题、可能成因、建议管理员跟进动作。避免攻击性措辞。
 反馈：
 {dumps(feedback)}
 """
@@ -4949,7 +5069,7 @@ def admin_feedback_ai_summary(feedback_id: int, authorization: str | None = Head
         summary = (
             f"反馈主题：{feedback['category']}。\n"
             "可能成因：员工观察到流程、协作或管理体验中存在可改善点。\n"
-            "建议动作：HR 先补充访谈事实，再判断是否需要流程优化、管理沟通或团队协作干预。"
+            "建议动作：管理员先补充访谈事实，再判断是否需要流程优化、管理沟通或团队协作干预。"
         )
         used_fallback = True
         if error:
@@ -5057,7 +5177,7 @@ def generate_organization_risks(
         context = build_diagnosis_context(conn, project_id, payload.hypothesis_id, payload.model_id)
     system = "你是资深组织诊断顾问，请基于证据生成组织风险，只输出可解析 JSON。"
     prompt = f"""
-请基于诊断假设、人才模型评分、诊断规则、员工反馈聚类和 360 差异分析生成组织风险。
+请基于诊断假设、胜任力模型评分、诊断规则、员工反馈聚类和 360 差异分析生成组织风险。
 输出 JSON：{{"risks":[{{"risk_type":"","title":"","description":"","evidence_json":{{}},"affected_scope":"","risk_level":"medium","suggested_action":""}}]}}。
 限制：不得输出自动晋升、淘汰、薪酬或裁员结论。
 上下文：
@@ -5160,11 +5280,11 @@ def generate_diagnosis_report(
     with get_connection() as conn:
         fetch_one_or_404(conn, "SELECT id FROM projects WHERE id = ?", (payload.project_id,), "project")
         context = build_diagnosis_context(conn, payload.project_id, payload.hypothesis_id, payload.model_id)
-    system = "你是资深 HR 组织诊断报告顾问，请生成结构化报告。"
+    system = "你是资深组织诊断报告顾问，请生成结构化报告。"
     prompt = f"""
-请生成 {payload.report_type}，包含诊断摘要、诊断假设、关键发现、评分差异、开放反馈主题、员工反馈交叉验证、AI 时代人才维度表现、组织问题归因、AI 转型卡点、风险提示、建议行动和 HR 人工确认区。
+请生成 {payload.report_type}，包含诊断摘要、诊断假设、关键发现、评分差异、开放反馈主题、员工反馈交叉验证、AI 时代胜任力维度表现、组织问题归因、AI 转型卡点、风险提示、建议行动和管理员人工确认区。
 如 include_action_plan 为 true，请包含 30/60/90 天计划。
-必须包含风控提示：本报告仅用于发展反馈和组织诊断，不作为自动晋升、淘汰、薪酬或裁员决策依据。所有结论需要 HR 结合业务事实进行人工确认。
+必须包含风控提示：本报告仅用于发展反馈和组织诊断，不作为自动晋升、淘汰、薪酬或裁员决策依据。所有结论需要管理员结合业务事实进行人工确认。
 输入：
 {dumps({"payload": payload.model_dump(), "context": context})}
 """

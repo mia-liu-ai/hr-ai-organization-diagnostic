@@ -287,6 +287,13 @@ const sourceTypeLabels: Record<string, string> = {
   open_feedback: '开放反馈',
   combined: '综合来源',
 };
+const problemTypeLabels: Record<ExtractedHypothesis['problem_type'], string> = {
+  individual: '个人能力',
+  manager: '管理能力',
+  organization: '组织机制',
+  ai_transformation: 'AI 转型',
+  governance: '治理风险',
+};
 const questionTypeLabels: Record<string, string> = {
   rating: '评分题',
   behavior_observation: '行为观察题',
@@ -729,6 +736,10 @@ export default function App() {
   const [expertCouncilSessions, setExpertCouncilSessions] = useState<
     ExpertCouncilSession[]
   >([]);
+  const [talentGenerationForm, setTalentGenerationForm] = useState({
+    target_role: '管理者',
+    target_level: '中层管理者',
+  });
   const [modelQuestionForm, setModelQuestionForm] = useState({
     source_mode: 'combined' as 'org_diagnosis' | 'talent_model' | 'combined',
     hypothesis_id: '',
@@ -1176,10 +1187,16 @@ export default function App() {
   async function loadStrategyReferences() {
     if (currentUser && !isHrUser && !localStorage.getItem(sessionStorageKey))
       return;
+    const id = selectedProjectId;
+    if (!id) {
+      setDiagnosisList([]);
+      setTalentModels([]);
+      return;
+    }
     try {
       const [hypotheses, models] = await Promise.all([
-        api.get<DiagnosisHypothesis[]>('/diagnosis/hypotheses'),
-        api.get<TalentModel[]>('/talent/models'),
+        api.get<DiagnosisHypothesis[]>(`/projects/${id}/diagnosis-hypotheses`),
+        api.get<TalentModel[]>(`/projects/${id}/talent-models`),
       ]);
       setDiagnosisList(hypotheses);
       setTalentModels(models);
@@ -1189,11 +1206,18 @@ export default function App() {
   }
 
   async function loadDiagnosisWorkspace() {
+    const id = selectedProjectId;
+    if (!id) {
+      setDiagnosisList([]);
+      setDiagnosisDraft({ ...blankDiagnosis, project_id: null });
+      setSelectedDiagnosisId(null);
+      return;
+    }
     setBusy(true);
     setError('');
     try {
       const items = await api.get<DiagnosisHypothesis[]>(
-        '/diagnosis/hypotheses',
+        `/projects/${id}/diagnosis-hypotheses`,
       );
       setDiagnosisList(items);
       const selected =
@@ -1202,7 +1226,7 @@ export default function App() {
         setSelectedDiagnosisId(selected.id ?? null);
         setDiagnosisDraft(selected);
       } else {
-        setDiagnosisDraft({ ...blankDiagnosis, project_id: projectId });
+        setDiagnosisDraft({ ...blankDiagnosis, project_id: id });
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载诊断假设失败');
@@ -1212,12 +1236,22 @@ export default function App() {
   }
 
   async function loadTalentWorkspace() {
+    const id = selectedProjectId;
+    if (!id) {
+      setDiagnosisList([]);
+      setTalentModels([]);
+      setTalentDraft({ ...blankTalentModel, project_id: null });
+      setSelectedTalentModelId(null);
+      return;
+    }
     setBusy(true);
     setError('');
     try {
       const [hypotheses, models] = await Promise.all([
-        api.get<DiagnosisHypothesis[]>('/diagnosis/hypotheses'),
-        api.get<TalentModel[]>('/talent/models'),
+        api.get<DiagnosisHypothesis[]>(
+          `/projects/${id}/diagnosis-hypotheses?status=confirmed`,
+        ),
+        api.get<TalentModel[]>(`/projects/${id}/talent-models`),
       ]);
       setDiagnosisList(hypotheses);
       setTalentModels(models);
@@ -1232,27 +1266,34 @@ export default function App() {
         );
         setTalentDraft({
           ...blankTalentModel,
-          project_id: projectId,
+          project_id: id,
           hypothesis_id: confirmed?.id ?? null,
         });
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : '加载人才模型失败');
+      setError(err instanceof Error ? err.message : '加载胜任力模型失败');
     } finally {
       setBusy(false);
     }
   }
 
   async function loadRulesWorkspace() {
+    const id = selectedProjectId;
+    if (!id) {
+      setDiagnosisList([]);
+      setTalentModels([]);
+      setDiagnosisRules([]);
+      return;
+    }
     setBusy(true);
     setError('');
     try {
       const [hypotheses, models, rules] = await Promise.all([
-        api.get<DiagnosisHypothesis[]>('/diagnosis/hypotheses'),
-        api.get<TalentModel[]>('/talent/models'),
-        api.get<DiagnosisRule[]>(
-          `/diagnosis/rules${projectId ? `?project_id=${projectId}` : ''}`,
+        api.get<DiagnosisHypothesis[]>(
+          `/projects/${id}/diagnosis-hypotheses?status=confirmed`,
         ),
+        api.get<TalentModel[]>(`/projects/${id}/talent-models`),
+        api.get<DiagnosisRule[]>(`/diagnosis/rules?project_id=${id}`),
       ]);
       setDiagnosisList(hypotheses);
       setTalentModels(models);
@@ -1268,7 +1309,7 @@ export default function App() {
       }));
       setRuleDraft((draft) => ({
         ...draft,
-        project_id: draft.project_id ?? projectId,
+        project_id: draft.project_id ?? id,
         hypothesis_id: draft.hypothesis_id ?? confirmed?.id ?? null,
         model_id: draft.model_id ?? model?.id ?? null,
       }));
@@ -1310,13 +1351,23 @@ export default function App() {
   }
 
   async function loadDiagnosisReportsWorkspace() {
+    const id = selectedProjectId;
+    if (!id) {
+      setDiagnosisList([]);
+      setTalentModels([]);
+      setDiagnosisReports([]);
+      setActionPlans([]);
+      return;
+    }
     setBusy(true);
     setError('');
     try {
-      const query = projectId ? `?project_id=${projectId}` : '';
+      const query = `?project_id=${id}`;
       const [hypotheses, models, reportsData, plans] = await Promise.all([
-        api.get<DiagnosisHypothesis[]>('/diagnosis/hypotheses'),
-        api.get<TalentModel[]>('/talent/models'),
+        api.get<DiagnosisHypothesis[]>(
+          `/projects/${id}/diagnosis-hypotheses?status=confirmed`,
+        ),
+        api.get<TalentModel[]>(`/projects/${id}/talent-models`),
         api.get<DiagnosisReport[]>(`/diagnosis/reports${query}`),
         api.get<ActionPlan[]>(`/action-plans${query}`),
       ]);
@@ -1918,6 +1969,17 @@ export default function App() {
     if (!projectId) return;
     void loadWorkspace(projectId);
     if (activeModule === 'organizationDiagnosis') void loadOrganizationDiagnosisOS();
+    if (activeModule === 'diagnosis') void loadDiagnosisWorkspace();
+    if (activeModule === 'talent') void loadTalentWorkspace();
+    if (activeModule === 'rules') void loadRulesWorkspace();
+    if (activeModule === 'diagnosisReports') void loadDiagnosisReportsWorkspace();
+    if (activeModule === 'expertCouncil') {
+      void loadOrganizationDashboard();
+      void loadDiagnosisReportsWorkspace();
+      void loadSurveysOS();
+      void loadExpertCouncilSessions();
+    }
+    if (activeModule === 'review360') void loadStrategyReferences();
     if (activeModule === 'surveyCenter' || activeModule === 'responseTracking')
       void loadSurveysOS();
   }, [projectId]);
@@ -2632,12 +2694,17 @@ export default function App() {
   }
 
   async function handleSaveDiagnosisDraft() {
+    const id = selectedProjectId;
+    if (!id) {
+      setNotice('请先前往项目中心创建或选择一个诊断项目');
+      return;
+    }
     setBusy(true);
     setError('');
     try {
       const payload = {
         ...diagnosisDraft,
-        project_id: diagnosisDraft.project_id ?? projectId,
+        project_id: id,
         status: diagnosisDraft.status || 'draft',
       };
       const saved = payload.id
@@ -2658,6 +2725,11 @@ export default function App() {
   }
 
   async function handleGenerateDiagnosis() {
+    const id = selectedProjectId;
+    if (!id) {
+      setNotice('请先前往项目中心创建或选择一个诊断项目');
+      return;
+    }
     setBusy(true);
     setError('');
     try {
@@ -2665,7 +2737,7 @@ export default function App() {
       if (!draft.id) {
         draft = await api.post<DiagnosisHypothesis>('/diagnosis/hypotheses', {
           ...diagnosisDraft,
-          project_id: diagnosisDraft.project_id ?? projectId,
+          project_id: id,
           status: 'draft',
         });
       }
@@ -2673,7 +2745,7 @@ export default function App() {
         '/diagnosis/hypotheses/generate',
         {
           ...draft,
-          project_id: draft.project_id ?? projectId,
+          project_id: id,
         },
       );
       setDiagnosisDraft(generated);
@@ -2701,7 +2773,7 @@ export default function App() {
       );
       setDiagnosisDraft(confirmed);
       await loadDiagnosisWorkspace();
-      setNotice('诊断假设已确认，可进入 AI 人才模型生成');
+      setNotice('诊断假设已确认，可进入胜任力模型生成');
     } catch (err) {
       setError(err instanceof Error ? err.message : '确认诊断假设失败');
     } finally {
@@ -2752,8 +2824,13 @@ export default function App() {
   }
 
   async function handleGenerateTalentModel() {
+    const id = selectedProjectId;
     if (!talentDraft.hypothesis_id) {
       setError('请先选择一个已确认的诊断假设');
+      return;
+    }
+    if (!id) {
+      setNotice('请先前往项目中心创建或选择一个诊断项目');
       return;
     }
     setBusy(true);
@@ -2764,9 +2841,11 @@ export default function App() {
         ai_run_id: number;
         used_fallback: boolean;
       }>('/talent/models/generate', {
-        project_id: talentDraft.project_id ?? projectId,
+        project_id: id,
         hypothesis_id: talentDraft.hypothesis_id,
         template: talentDraft.template || 'AI 原生管理者模型',
+        target_role: talentGenerationForm.target_role,
+        target_level: talentGenerationForm.target_level,
       });
       setTalentDraft({
         ...result.model,
@@ -2776,22 +2855,27 @@ export default function App() {
       setNotice(
         result.used_fallback
           ? '已返回本地规则 AI 原生管理者模型'
-          : 'AI 人才模型已生成',
+          : 'AI 胜任力模型已生成',
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : '生成人才模型失败');
+      setError(err instanceof Error ? err.message : '生成胜任力模型失败');
     } finally {
       setBusy(false);
     }
   }
 
   async function handleSaveTalentModel() {
+    const id = selectedProjectId;
+    if (!id) {
+      setNotice('请先前往项目中心创建或选择一个诊断项目');
+      return;
+    }
     setBusy(true);
     setError('');
     try {
       const payload = {
         ...talentDraft,
-        project_id: talentDraft.project_id ?? projectId,
+        project_id: id,
       };
       const saved = payload.id
         ? await api.put<TalentModel>(`/talent/models/${payload.id}`, payload)
@@ -2799,9 +2883,9 @@ export default function App() {
       setTalentDraft(saved);
       setSelectedTalentModelId(saved.id ?? null);
       await loadTalentWorkspace();
-      setNotice('AI 时代人才模型已保存');
+      setNotice('AI 时代胜任力模型已保存');
     } catch (err) {
-      setError(err instanceof Error ? err.message : '保存人才模型失败');
+      setError(err instanceof Error ? err.message : '保存胜任力模型失败');
     } finally {
       setBusy(false);
     }
@@ -2817,9 +2901,9 @@ export default function App() {
       );
       setTalentDraft(confirmed);
       await loadTalentWorkspace();
-      setNotice('人才模型已确认，可基于该模型生成问卷');
+      setNotice('胜任力模型已确认，可基于该模型生成问卷');
     } catch (err) {
-      setError(err instanceof Error ? err.message : '确认人才模型失败');
+      setError(err instanceof Error ? err.message : '确认胜任力模型失败');
     } finally {
       setBusy(false);
     }
@@ -2840,9 +2924,9 @@ export default function App() {
       setSelectedTalentModelId(null);
       setTalentDraft({ ...blankTalentModel, project_id: projectId });
       await loadTalentWorkspace();
-      setNotice('人才模型已删除');
+      setNotice('胜任力模型已删除');
     } catch (err) {
-      setError(err instanceof Error ? err.message : '删除人才模型失败');
+      setError(err instanceof Error ? err.message : '删除胜任力模型失败');
     } finally {
       setBusy(false);
     }
@@ -2895,7 +2979,7 @@ export default function App() {
       !modelQuestionForm.hypothesis_id ||
       !modelQuestionForm.model_id
     ) {
-      setError('请先选择项目、诊断假设和人才模型');
+      setError('请先选择项目、诊断假设和胜任力模型');
       return;
     }
     setBusy(true);
@@ -2927,7 +3011,7 @@ export default function App() {
       setNotice(
         result.used_fallback
           ? '已基于本地规则生成 AI 时代诊断问卷'
-          : '已基于诊断假设和人才模型生成问卷',
+          : '已基于诊断假设和胜任力模型生成问卷',
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : '基于模型生成问卷失败');
@@ -3799,7 +3883,7 @@ export default function App() {
     const steps = [
       '项目设置',
       '组织诊断',
-      '人才模型',
+      '胜任力模型',
       '问卷调研及回收',
       '360 Review',
       '诊断看板',
@@ -4271,6 +4355,12 @@ export default function App() {
           <p>
             系统会把已确认的诊断假设、组织能力维度和胜任力模型转化为可填写的问题，用来支持后续的数据洞察、AI 专家诊断会、诊断报告和行动计划。
           </p>
+          <div className="grid gap-2 rounded-xl bg-white/80 p-3">
+            <p>组织诊断假设回答：“当前组织可能出了什么问题？”</p>
+            <p>组织能力维度回答：“我们从哪些组织能力角度观察问题？”</p>
+            <p>胜任力模型回答：“解决这些组织问题，需要管理者和员工具备哪些能力与行为？”</p>
+            <p>诊断问卷回答：“我们如何收集证据，验证这些假设和能力差距？”</p>
+          </div>
           <div className="grid gap-3 md:grid-cols-4">
             <div className="rounded-xl bg-white/80 p-3">
               <p className="font-bold text-slate-950">组织诊断题</p>
@@ -4334,7 +4424,7 @@ export default function App() {
               </select>
             </Field>
             <div className="rounded-lg bg-white p-3 text-sm leading-6 text-slate-600">
-              系统会基于已确认的诊断假设、组织能力维度和胜任力模型生成综合问卷；保存后进入问卷中心，并保留每道题的问题来源和题型。
+              系统会基于已确认的诊断假设、组织能力维度和胜任力模型生成综合问卷；保存后进入问卷中心，并保留每道题的问题来源和题型，供数据洞察和 AI 专家诊断会继续使用。
             </div>
           </div>
         ) : null}
@@ -4460,7 +4550,7 @@ export default function App() {
             }
           >
             <p className="text-sm leading-6 text-slate-600">
-              诊断会把当前项目的诊断假设、组织诊断维度、人才模型、问卷统计、360数据、员工反馈、报告草案放到同一个讨论桌上。
+              诊断会把当前项目的诊断假设、组织诊断维度、胜任力模型、问卷统计、360数据、员工反馈、报告草案放到同一个讨论桌上。
               当前版本先输出结构化共识草案；后续会把每次诊断会保存到当前项目下，并接入真实 AI 多专家生成。
             </p>
             <div className="mt-4 grid gap-3 md:grid-cols-3">
@@ -4633,7 +4723,7 @@ export default function App() {
             }
           >
             <p className="text-sm leading-6 text-slate-600">
-              AI 专家诊断会会把项目目标、诊断假设、组织能力维度、胜任力模型、问卷统计、360 反馈、员工开放反馈和人才画像放到同一张讨论桌上，形成可追溯的共识结论。当前版本先保存结构化结果，后续统一通过 AI Provider 接入真实模型。
+              AI 专家诊断会发生在问卷、360、员工反馈和数据洞察之后。它会基于真实证据进行专家辩论和诊断，输出关键组织问题、支持证据、反对证据、专家分歧、置信度和行动建议，用于后续报告与行动计划。
             </p>
             {evidenceWeak ? (
               <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-900">
@@ -5107,7 +5197,7 @@ export default function App() {
                 诊断假设
               </Button>
               <Button variant="secondary" onClick={() => goModule('talent')}>
-                AI人才模型
+                胜任力模型
               </Button>
               <Button variant="secondary" onClick={() => goModule('rules')}>
                 诊断规则
@@ -5924,8 +6014,7 @@ export default function App() {
             eyebrow="诊断假设控制台"
           >
             <p className="text-sm leading-6 text-slate-600">
-              请先输入你对当前组织、团队或人才问题的判断。AI 会结合 AI
-              时代人才模型和组织诊断框架，生成可执行的诊断假设，并用于后续人才模型和问卷生成。
+              AI 预诊断会发生在设置诊断目标之后、编辑诊断假设之前。它会根据项目背景和目标提出初步诊断假设、风险点和建议观察维度；这些内容是预诊断输入，不是最终结论，确认后才会进入胜任力模型和问卷生成。
             </p>
             <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-900">
               AI
@@ -5961,15 +6050,19 @@ export default function App() {
                       className={inputClass}
                       value={diagnosisDraft.project_id ?? projectId ?? ''}
                       onChange={(event) =>
-                        setDiagnosisDraft({
-                          ...diagnosisDraft,
-                          project_id: event.target.value
+                        {
+                          const nextProjectId = event.target.value
                             ? Number(event.target.value)
-                            : null,
-                        })
+                            : null;
+                          setProjectId(nextProjectId);
+                          setDiagnosisDraft({
+                            ...diagnosisDraft,
+                            project_id: nextProjectId,
+                          });
+                        }
                       }
                     >
-                      <option value="">不关联项目</option>
+                      <option value="">请选择项目</option>
                       {projects.map((project) => (
                         <option key={project.id} value={project.id}>
                           {project.name}
@@ -6195,7 +6288,7 @@ export default function App() {
                     goModule('talent');
                   }}
                 >
-                  进入 AI 人才模型生成
+                  进入胜任力模型生成
                 </Button>
               </>
             }
@@ -6322,16 +6415,92 @@ export default function App() {
     );
     return (
       <div className="min-h-screen bg-slate-100 text-slate-900">
-        {renderGlobalHeader('AI 时代人才模型')}
+        {renderGlobalHeader('AI 时代胜任力模型')}
         <main className="mx-auto grid max-w-7xl gap-5 px-5 py-6 lg:px-8">
-          <Panel title="AI 时代人才模型" eyebrow="胜任力模型构建器">
+          <Panel title="AI 时代胜任力模型" eyebrow="胜任力模型构建器">
             <p className="text-sm leading-6 text-slate-600">
-              系统将基于管理员确认的诊断假设，生成适合本次项目的 AI
-              时代人才能力模型。你可以编辑维度、行为标准、题目和权重，并将其用于后续问卷生成。
+              系统将基于当前项目已确认的诊断假设和组织能力维度，生成适合本次项目的胜任力模型。你可以编辑维度、行为标准、题目和权重，并将其用于后续问卷生成。
             </p>
             <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-900">
-              人才模型仅用于发展反馈、能力诊断和组织改进，不应作为自动化人事决策依据。
+              胜任力模型仅用于发展反馈、能力诊断和组织改进，不应作为自动化人事决策依据。
             </div>
+          </Panel>
+
+          <Panel title="已确认诊断假设">
+            {confirmedHypotheses.length ? (
+              <div className="grid gap-3">
+                {confirmedHypotheses.flatMap((hypothesis) =>
+                  (hypothesis.ai_extracted_hypotheses.length
+                    ? hypothesis.ai_extracted_hypotheses
+                    : [
+                        {
+                          hypothesis_title: hypothesis.target_scope,
+                          hypothesis_detail: hypothesis.hr_core_judgment,
+                          problem_type: 'organization' as const,
+                          suggested_validation_method: hypothesis.constraints,
+                          suggested_data_sources: hypothesis.expected_outputs,
+                          related_talent_dimensions: hypothesis.focus_issues,
+                        },
+                      ]).map((item, index) => (
+                    <article
+                      key={`${hypothesis.id}-${item.hypothesis_title}-${index}`}
+                      className="rounded-lg border border-slate-200 bg-white p-4 text-sm leading-6"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <p className="font-black text-slate-950">
+                            {item.hypothesis_title || '未命名诊断假设'}
+                          </p>
+                          <p className="mt-1 text-slate-600">
+                            {item.hypothesis_detail || '暂无假设说明'}
+                          </p>
+                        </div>
+                        <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-bold text-emerald-800">
+                          {displayStatus(hypothesis.status)}
+                        </span>
+                      </div>
+                      <div className="mt-3 grid gap-2 md:grid-cols-2">
+                        <p>
+                          <span className="font-semibold text-slate-800">
+                            问题类型：
+                          </span>
+                          {problemTypeLabels[item.problem_type] ?? item.problem_type}
+                        </p>
+                        <p>
+                          <span className="font-semibold text-slate-800">
+                            关联组织能力维度：
+                          </span>
+                          {item.related_talent_dimensions.length
+                            ? item.related_talent_dimensions.join('、')
+                            : '未填写'}
+                        </p>
+                        <p className="md:col-span-2">
+                          <span className="font-semibold text-slate-800">
+                            证据需求 / 观察重点：
+                          </span>
+                          {item.suggested_validation_method ||
+                            item.suggested_data_sources.join('、') ||
+                            '未填写'}
+                        </p>
+                      </div>
+                    </article>
+                  )),
+                )}
+              </div>
+            ) : (
+              <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-5">
+                <p className="text-sm leading-6 text-slate-600">
+                  当前项目还没有已确认的诊断假设。请先在诊断假设页面确认假设，再生成胜任力模型。
+                </p>
+                <Button
+                  className="mt-3"
+                  variant="secondary"
+                  onClick={() => goModule('diagnosis')}
+                >
+                  前往诊断假设
+                </Button>
+              </div>
+            )}
           </Panel>
 
           <div className="grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
@@ -6378,12 +6547,38 @@ export default function App() {
                     ))}
                   </select>
                 </Field>
+                <Field label="目标岗位">
+                  <input
+                    className={inputClass}
+                    value={talentGenerationForm.target_role}
+                    onChange={(event) =>
+                      setTalentGenerationForm({
+                        ...talentGenerationForm,
+                        target_role: event.target.value,
+                      })
+                    }
+                    placeholder="例如：中层管理者"
+                  />
+                </Field>
+                <Field label="目标层级">
+                  <input
+                    className={inputClass}
+                    value={talentGenerationForm.target_level}
+                    onChange={(event) =>
+                      setTalentGenerationForm({
+                        ...talentGenerationForm,
+                        target_level: event.target.value,
+                      })
+                    }
+                    placeholder="例如：部门负责人 / P7-P8"
+                  />
+                </Field>
                 <Button
                   onClick={handleGenerateTalentModel}
                   disabled={busy || !talentDraft.hypothesis_id}
                 >
                   <Sparkles size={16} />
-                  AI 生成人才模型
+                  AI 生成胜任力模型
                 </Button>
                 <Button
                   variant="secondary"
@@ -6393,7 +6588,7 @@ export default function App() {
                   }
                 >
                   <Save size={16} />
-                  保存为本项目人才模型
+                  保存为本项目胜任力模型
                 </Button>
                 <Button
                   variant="secondary"
@@ -6401,7 +6596,7 @@ export default function App() {
                   disabled={busy || !talentDraft.id}
                 >
                   <Check size={16} />
-                  确认人才模型
+                  确认胜任力模型
                 </Button>
                 <Button
                   disabled={!talentDraft.id}
@@ -6424,7 +6619,7 @@ export default function App() {
               </div>
             </Panel>
 
-            <Panel title="已保存人才模型">
+            <Panel title="已保存胜任力模型">
               {talentModels.length ? (
                 <div className="grid gap-2 md:grid-cols-2">
                   {talentModels.map((model) => (
@@ -6461,8 +6656,8 @@ export default function App() {
                 </div>
               ) : (
                 <EmptyState
-                  title="暂无人才模型"
-                  body="选择已确认诊断假设后生成并保存人才模型。"
+                  title="暂无胜任力模型"
+                  body="选择已确认诊断假设后生成并保存胜任力模型。"
                 />
               )}
             </Panel>
@@ -6637,7 +6832,7 @@ export default function App() {
               ) : (
                 <EmptyState
                   title="还没有模型维度"
-                  body="点击 AI 生成人才模型；没有模型凭证时会返回本地规则模型。"
+                  body="点击 AI 生成胜任力模型；没有模型凭证时会返回本地规则模型。"
                 />
               )}
             </div>
@@ -6740,7 +6935,7 @@ export default function App() {
           <Panel title="诊断规则" eyebrow="诊断规则构建器">
             <p className="text-sm leading-6 text-slate-600">
               诊断规则用于定义系统如何解释评分差异、开放反馈和员工反馈主题。AI
-              会基于已确认的管理员诊断假设和 AI 人才模型生成规则，管理员
+              会基于已确认的诊断假设和 AI 胜任力模型生成规则，管理员
               可以编辑后保存。后续组织诊断看板和报告将使用这些规则进行解释。
             </p>
             <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-900">
@@ -6803,7 +6998,7 @@ export default function App() {
                     ))}
                   </select>
                 </Field>
-                <Field label="人才模型">
+                <Field label="胜任力模型">
                   <select
                     className={inputClass}
                     value={ruleForm.model_id}
@@ -7038,7 +7233,7 @@ export default function App() {
             ) : (
               <EmptyState
                 title="暂无诊断规则"
-                body="选择诊断假设和人才模型后点击 AI 生成诊断规则；没有模型凭证时会返回本地规则草稿。"
+                body="选择诊断假设和胜任力模型后点击 AI 生成诊断规则；没有模型凭证时会返回本地规则草稿。"
               />
             )}
           </Panel>
@@ -7076,7 +7271,7 @@ export default function App() {
           >
             <p className="text-sm leading-6 text-slate-600">
               看板结合 360 评分、AI
-              人才模型、诊断规则、员工声音聚类和组织风险，帮助管理员
+              胜任力模型、诊断规则、员工声音聚类和组织风险，帮助管理员
               判断可能的组织问题，而不是只看问卷平均分。
             </p>
             <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-900">
@@ -7108,7 +7303,7 @@ export default function App() {
               </div>
 
               <div className="grid gap-5 xl:grid-cols-2">
-                <Panel title="AI 时代人才模型表现">
+                <Panel title="AI 时代胜任力模型表现">
                   <div className="grid gap-3">
                     <p className="text-sm leading-6 text-slate-600">
                       低分维度意味着可能存在能力、流程或管理机制卡点，建议结合诊断规则和访谈验证。
@@ -7371,7 +7566,7 @@ export default function App() {
                     ))}
                   </select>
                 </Field>
-                <Field label="人才模型，可选">
+                <Field label="胜任力模型，可选">
                   <select
                     className={inputClass}
                     value={diagnosisReportForm.model_id}
@@ -7576,10 +7771,12 @@ export default function App() {
   function renderHomePageClean() {
     const adminSteps = [
       ['创建诊断项目', '明确诊断场景、参与对象和项目周期。', 'projectWorkspace'],
-      ['设置诊断目标和组织能力维度', '确定要观察的组织能力和问题边界。', 'organizationDiagnosis'],
-      ['确认诊断假设与胜任力模型', '把组织问题转成可验证假设和能力标准。', 'diagnosis'],
-      ['生成并发放综合问卷', '组合组织诊断、胜任力、360评审和开放反馈问题。', 'review360'],
-      ['查看专家诊断会、报告和行动计划', '形成共识、生成报告，并落到行动追踪。', 'expertCouncil'],
+      ['设置诊断目标', '明确本次诊断要回答的组织问题。', 'projectWorkspace'],
+      ['AI 预诊断会', '提出初步假设、风险点和建议观察维度。', 'diagnosis'],
+      ['配置组织能力维度', '确定从哪些组织能力角度观察问题。', 'organizationDiagnosis'],
+      ['生成胜任力模型', '把已确认假设转成能力标准和行为指标。', 'talent'],
+      ['生成综合问卷', '把假设、维度和模型转成证据收集问题。', 'review360'],
+      ['AI 专家诊断会', '基于真实证据形成共识、报告和行动计划。', 'expertCouncil'],
     ] as const;
     const employeeCards = [
       ['为什么需要填写', '帮助团队发现协作、沟通、管理和工具使用中的真实问题。'],
@@ -7601,9 +7798,9 @@ export default function App() {
               让组织问题从“感觉”变成证据、共识和行动
             </h1>
             <p className="mt-4 max-w-3xl text-base leading-7 text-slate-600">
-              系统围绕同一条主流程运行：创建项目 → 设置诊断目标 → 配置组织能力维度 →
-              生成或编辑诊断假设 → 生成胜任力模型 → 生成综合问卷 → 员工填写 →
-              数据洞察 → AI 专家诊断会 → 生成报告 → 制定行动计划 → 后续复盘。
+              系统围绕同一条主流程运行：创建项目 → 设置诊断目标 → AI 预诊断会 →
+              编辑诊断假设 → 配置组织能力维度 → 生成胜任力模型 → 生成综合问卷 →
+              员工填写 → 数据洞察 → AI 专家诊断会 → 生成报告 → 制定行动计划 → 后续复盘。
             </p>
           </section>
 
@@ -7672,13 +7869,13 @@ export default function App() {
     const moduleCards = [
       {
         title: '诊断假设',
-        body: '输入组织管理员对组织、团队和人才问题的判断，由 AI 提炼为可验证的诊断假设。',
+        body: 'AI 预诊断会会根据项目背景和诊断目标，提出初步假设、风险点和建议观察维度。',
         icon: <Bot className="text-sky-700" size={24} />,
         action: () => goModule('diagnosis'),
       },
       {
-        title: 'AI人才模型',
-        body: '基于诊断假设生成 AI 时代能力模型，支持编辑维度、行为标准、样例题目和权重。',
+        title: '胜任力模型',
+        body: '基于当前项目已确认诊断假设生成胜任力模型，支持编辑维度、行为标准、样例题目和权重。',
         icon: <Sparkles className="text-emerald-700" size={24} />,
         action: () => goModule('talent'),
       },
@@ -7690,7 +7887,7 @@ export default function App() {
       },
       {
         title: '组织诊断',
-        body: '结合诊断规则、员工声音、360 差异和 AI 人才模型识别组织管理问题。',
+        body: '结合诊断规则、员工声音、360 差异和胜任力模型识别组织管理问题。',
         icon: <BarChart3 className="text-emerald-700" size={24} />,
         action: () => goModule('orgDashboard'),
       },
@@ -8239,12 +8436,12 @@ export default function App() {
         </Panel>
         <Panel title="证据收集方案" eyebrow="证据收集方案">
           <p className="text-sm leading-6 text-slate-600">
-            问卷不是独立功能，而是证据收集方案的一部分。一个问卷可以同时包含组织诊断问题、人才/胜任力模型问题、360评审问题和开放反馈问题；生成后统一进入问卷中心，按当前项目隔离管理。
+            问卷不是独立功能，而是证据收集方案的一部分。一个问卷可以同时包含组织诊断问题、胜任力模型问题、360评审问题和开放反馈问题；生成后统一进入问卷中心，按当前项目隔离管理。
           </p>
         </Panel>
         <Panel
-          title="AI 生成胜任力模型"
-          eyebrow="胜任力模型"
+          title="AI 生成综合问卷"
+          eyebrow="证据收集"
           actions={
             <>
               <Button
@@ -8309,8 +8506,7 @@ export default function App() {
           }
         >
           <p className="text-sm leading-6 text-slate-600">
-            基于管理员已确认的诊断假设和 AI
-            时代人才模型，生成更贴合公司真实问题的评分题、行为观察题和开放题。
+            基于已确认的诊断假设和胜任力模型，生成更贴合当前项目真实问题的评分题、行为观察题和开放题。
           </p>
           <div className="mt-4 grid gap-4 md:grid-cols-2">
             <Field label="选择诊断假设">
@@ -8339,7 +8535,7 @@ export default function App() {
                 ))}
               </select>
             </Field>
-            <Field label="选择人才模型">
+            <Field label="选择胜任力模型">
               <select
                 className={inputClass}
                 value={modelQuestionForm.model_id}
@@ -8350,7 +8546,7 @@ export default function App() {
                   })
                 }
               >
-                <option value="">请选择已保存人才模型</option>
+                <option value="">请选择已保存胜任力模型</option>
                 {availableTalentModels.map((model) => (
                   <option key={model.id} value={model.id}>
                     {model.name} · {displayStatus(model.status)}
@@ -8682,7 +8878,7 @@ export default function App() {
           ) : (
             <EmptyState
               title="还没有问卷题目"
-              body="输入岗位和层级后生成胜任力模型，也可以手动添加维度。"
+              body="输入岗位和层级后生成综合问卷，也可以手动添加维度和题目。"
             />
           )}
         </Panel>
@@ -9707,7 +9903,7 @@ export default function App() {
               onClick={() => goModule('talent')}
             >
               <Sparkles size={18} />
-              AI人才模型
+              胜任力模型
             </button>
             <button
               className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-slate-600 hover:bg-slate-100 hover:text-slate-950"
