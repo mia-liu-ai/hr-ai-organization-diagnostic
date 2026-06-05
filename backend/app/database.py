@@ -158,6 +158,8 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT UNIQUE NOT NULL,
+                email TEXT NOT NULL DEFAULT '',
+                phone TEXT NOT NULL DEFAULT '',
                 password_hash TEXT NOT NULL,
                 role TEXT NOT NULL DEFAULT 'employee',
                 employee_id INTEGER,
@@ -168,10 +170,12 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS review_tasks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 project_id INTEGER NOT NULL,
+                survey_id INTEGER,
                 reviewee_id INTEGER NOT NULL,
                 reviewer_id INTEGER NOT NULL,
                 relation_type TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'pending',
+                due_date TEXT NOT NULL DEFAULT '',
                 submitted_at TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
@@ -407,6 +411,9 @@ def init_db() -> None:
                 survey_type TEXT NOT NULL,
                 title TEXT NOT NULL,
                 description TEXT NOT NULL DEFAULT '',
+                purpose TEXT NOT NULL DEFAULT '',
+                target_scope TEXT NOT NULL DEFAULT '',
+                total_question_count INTEGER NOT NULL DEFAULT 0,
                 status TEXT NOT NULL DEFAULT 'draft',
                 created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -426,6 +433,8 @@ def init_db() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
                 survey_id INTEGER NOT NULL REFERENCES surveys(id) ON DELETE CASCADE,
+                hypothesis_id INTEGER,
+                model_id INTEGER,
                 source_type TEXT NOT NULL DEFAULT 'manual',
                 question_type TEXT NOT NULL DEFAULT 'rating',
                 dimension_key TEXT NOT NULL DEFAULT '',
@@ -433,8 +442,30 @@ def init_db() -> None:
                 question_text TEXT NOT NULL,
                 options_json TEXT NOT NULL DEFAULT '[]',
                 required INTEGER NOT NULL DEFAULT 1,
+                target_role TEXT NOT NULL DEFAULT '',
+                weight REAL NOT NULL DEFAULT 1,
+                source TEXT NOT NULL DEFAULT 'ai_generated',
+                status TEXT NOT NULL DEFAULT 'draft',
                 sort_order INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS survey_assignments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                survey_id INTEGER NOT NULL REFERENCES surveys(id) ON DELETE CASCADE,
+                respondent_user_id INTEGER,
+                respondent_employee_id INTEGER,
+                target_employee_id INTEGER,
+                relationship_type TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'assigned',
+                due_date TEXT NOT NULL DEFAULT '',
+                anonymous INTEGER NOT NULL DEFAULT 1,
+                allow_resubmit INTEGER NOT NULL DEFAULT 0,
+                reminder_text TEXT NOT NULL DEFAULT '',
+                submitted_at TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(project_id, survey_id, respondent_employee_id, target_employee_id, relationship_type)
             );
 
             CREATE TABLE IF NOT EXISTS organization_feedback (
@@ -553,6 +584,7 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_surveys_project ON surveys(project_id, survey_type, status);
             CREATE INDEX IF NOT EXISTS idx_survey_responses_project ON survey_responses(project_id, survey_id);
             CREATE INDEX IF NOT EXISTS idx_survey_questions_project ON survey_questions(project_id, survey_id, source_type);
+            CREATE INDEX IF NOT EXISTS idx_survey_assignments_project ON survey_assignments(project_id, survey_id, respondent_employee_id, status);
             CREATE INDEX IF NOT EXISTS idx_organization_feedback_project ON organization_feedback(project_id, feedback_type);
             CREATE INDEX IF NOT EXISTS idx_os_reports_project ON os_reports(project_id, report_type, user_id);
             """
@@ -567,7 +599,15 @@ def init_db() -> None:
                 ("anonymous", "INTEGER NOT NULL DEFAULT 1"),
                 ("created_by", "INTEGER"),
             ],
-            "employees": [("manager_name", "TEXT NOT NULL DEFAULT ''")],
+            "employees": [
+                ("manager_name", "TEXT NOT NULL DEFAULT ''"),
+                ("username", "TEXT NOT NULL DEFAULT ''"),
+                ("email", "TEXT NOT NULL DEFAULT ''"),
+                ("phone", "TEXT NOT NULL DEFAULT ''"),
+                ("position", "TEXT NOT NULL DEFAULT ''"),
+                ("manager_id", "INTEGER"),
+                ("is_active", "INTEGER NOT NULL DEFAULT 1"),
+            ],
             "questions": [
                 ("competency_id", "INTEGER"),
                 ("hypothesis_id", "INTEGER"),
@@ -610,6 +650,25 @@ def init_db() -> None:
             "users": [
                 ("employee_id", "INTEGER"),
                 ("status", "TEXT NOT NULL DEFAULT 'active'"),
+                ("email", "TEXT NOT NULL DEFAULT ''"),
+                ("phone", "TEXT NOT NULL DEFAULT ''"),
+            ],
+            "review_tasks": [
+                ("survey_id", "INTEGER"),
+                ("due_date", "TEXT NOT NULL DEFAULT ''"),
+            ],
+            "surveys": [
+                ("purpose", "TEXT NOT NULL DEFAULT ''"),
+                ("target_scope", "TEXT NOT NULL DEFAULT ''"),
+                ("total_question_count", "INTEGER NOT NULL DEFAULT 0"),
+            ],
+            "survey_questions": [
+                ("hypothesis_id", "INTEGER"),
+                ("model_id", "INTEGER"),
+                ("target_role", "TEXT NOT NULL DEFAULT ''"),
+                ("weight", "REAL NOT NULL DEFAULT 1"),
+                ("source", "TEXT NOT NULL DEFAULT 'ai_generated'"),
+                ("status", "TEXT NOT NULL DEFAULT 'draft'"),
             ],
             "feedback_items": [
                 ("priority", "TEXT NOT NULL DEFAULT 'normal'"),
@@ -631,16 +690,9 @@ def init_db() -> None:
         conn.execute("UPDATE questions SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL OR created_at = ''")
         conn.execute("UPDATE feedback_items SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL OR updated_at = ''")
         conn.execute("UPDATE users SET role = 'admin' WHERE role IN ('boss', 'hr')")
-
-        admin_exists = conn.execute("SELECT id FROM users WHERE username = ?", ("admin",)).fetchone()
-        if not admin_exists:
-            conn.execute(
-                """
-                INSERT INTO users (username, password_hash, role, status)
-                VALUES (?, ?, 'admin', 'active')
-                """,
-                (DEFAULT_ADMIN_USERNAME, hash_login_code(DEFAULT_ADMIN_CREDENTIAL)),
-            )
+        conn.execute(
+            "UPDATE users SET username = 'admin-legacy-' || id WHERE username IN ('boss@demo.com', 'hr@demo.com')"
+        )
 
         demo_project = conn.execute(
             "SELECT id FROM projects WHERE name = ?",
@@ -656,10 +708,10 @@ def init_db() -> None:
                 """,
                 (
                     "2026 Q2 AI 原生组织诊断项目",
-                    "Sample：用于演示 AI 原生组织与人才诊断系统的 combined 项目。",
+                    "样例：用于演示 AI 原生组织诊断系统的综合项目。",
                     "combined",
                     "全员",
-                    "组织诊断 + 人才盘点 + 360 Review",
+                    "组织诊断 + 人才盘点 + 360 评审",
                     "全员",
                     "2026-04-01",
                     "2026-06-30",
@@ -670,8 +722,8 @@ def init_db() -> None:
             demo_project_id = int(demo_project["id"])
 
         employee_row = conn.execute(
-            "SELECT id FROM employees WHERE project_id = ? AND name = ?",
-            (demo_project_id, "Demo Employee"),
+            "SELECT id FROM employees WHERE project_id = ? AND name IN (?, ?)",
+            (demo_project_id, "演示员工", "Demo Employee"),
         ).fetchone()
         if not employee_row:
             cur = conn.execute(
@@ -680,18 +732,26 @@ def init_db() -> None:
                     (project_id, name, department, role, level, manager, manager_name)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (demo_project_id, "Demo Employee", "产品与运营", "AI 转型项目成员", "P6", "HR Demo", "HR Demo"),
+                (demo_project_id, "演示员工", "产品与运营", "AI 转型项目成员", "P6", "管理员演示", "管理员演示"),
             )
             demo_employee_id = int(cur.lastrowid)
         else:
             demo_employee_id = int(employee_row["id"])
+            conn.execute(
+                """
+                UPDATE employees
+                SET name = '演示员工',
+                    manager = CASE WHEN manager = 'HR Demo' THEN '管理员演示' ELSE manager END,
+                    manager_name = CASE WHEN manager_name = 'HR Demo' THEN '管理员演示' ELSE manager_name END
+                WHERE id = ?
+                """,
+                (demo_employee_id,),
+            )
 
         demo_users = [
             ("admin", "admin123", "admin", None),
             ("employee", "employee123", "employee", demo_employee_id),
             ("admin@demo.com", "demo123", "admin", None),
-            ("boss@demo.com", "demo123", "admin", None),
-            ("hr@demo.com", "demo123", "admin", None),
             ("employee@demo.com", "demo123", "employee", demo_employee_id),
         ]
         for username, credential, role, employee_id in demo_users:
@@ -704,11 +764,20 @@ def init_db() -> None:
                     """,
                     (username, hash_login_code(credential), role, employee_id),
                 )
+            elif username in {"admin", "employee"}:
+                conn.execute(
+                    """
+                    UPDATE users
+                    SET password_hash = ?, role = ?, employee_id = ?, status = 'active'
+                    WHERE username = ?
+                    """,
+                    (hash_login_code(credential), role, employee_id, username),
+                )
 
         for survey_type, title in [
             ("org_diagnosis", "组织诊断问卷"),
             ("self_assessment", "员工自评问卷"),
-            ("review_360", "360 Review 问卷"),
+            ("review_360", "360 评审问卷"),
             ("organization_feedback", "组织反馈问卷"),
         ]:
             existing_survey = conn.execute(
@@ -719,7 +788,7 @@ def init_db() -> None:
                 conn.execute(
                     """
                     INSERT INTO surveys (project_id, survey_type, title, description, status)
-                    VALUES (?, ?, ?, 'Sample：Demo 项目默认问卷。', 'active')
+                    VALUES (?, ?, ?, '样例：演示项目默认问卷。', 'active')
                     """,
                     (demo_project_id, survey_type, title),
                 )

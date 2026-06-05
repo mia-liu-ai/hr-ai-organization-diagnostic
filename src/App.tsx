@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ButtonHTMLAttributes, FormEvent, ReactNode } from 'react';
 import {
   Activity,
@@ -42,7 +42,6 @@ import type {
   ExpertCouncilSession,
   FeedbackCluster,
   FeedbackItem,
-  ModelGeneratedQuestion,
   OrganizationDiagnosisDimension,
   OrganizationDiagnosisResult,
   OrganizationDashboard,
@@ -58,6 +57,7 @@ import type {
   Report,
   ReviewTask,
   Survey,
+  SurveyAssignment,
   SurveyDetail,
   SurveyResponse,
   TalentDimension,
@@ -79,6 +79,9 @@ type Module =
   | 'login'
   | 'executiveDashboard'
   | 'projectWorkspace'
+  | 'projectList'
+  | 'diagnosisDesign'
+  | 'preDiagnosis'
   | 'organizationDiagnosis'
   | 'talentOverview'
   | 'surveyCenter'
@@ -101,6 +104,13 @@ type Module =
   | 'orgDashboard'
   | 'diagnosisReports'
   | 'expertCouncil';
+
+type Review360Stage =
+  | 'questionnaireDesign'
+  | 'questionnaireGenerate'
+  | 'distribution'
+  | 'dataCollection'
+  | 'employeeFeedback';
 
 type ExpertCouncilResult = {
   project_id: number | null;
@@ -278,7 +288,7 @@ const modelQuestionTypes = [
 ];
 const sourceTypeLabels: Record<string, string> = {
   manual: '手动添加',
-  hypothesis: '组织诊断',
+  hypothesis: '已确认诊断假设',
   org_diagnosis: '组织诊断',
   dimension: '组织能力维度',
   talent_model: '胜任力模型',
@@ -365,6 +375,7 @@ const statusLabels: Record<string, string> = {
   resolved: '已解决',
   archived: '已归档',
   disabled: '已停用',
+  deleted: '已删除',
 };
 
 const surveyTypeLabels: Record<string, string> = {
@@ -380,6 +391,16 @@ const reportTypeLabels: Record<string, string> = {
   employee_report: '员工成长报告',
 };
 
+const feedbackTypeLabels: Record<string, string> = {
+  process: '流程问题',
+  management: '管理沟通',
+  ai_tools: '工具使用',
+  collaboration: '跨团队协作',
+  culture: '文化氛围',
+  risk: '风险信号',
+  other: '其他',
+};
+
 function displayStatus(value: string | undefined) {
   return value ? statusLabels[value] || value : '未设置';
 }
@@ -388,8 +409,53 @@ function displayReportType(value: string | undefined) {
   return value ? reportTypeLabels[value] || value : '诊断报告';
 }
 
+function displayErrorMessage(err: unknown, fallback: string) {
+  if (!(err instanceof Error)) return fallback;
+  const message = err.message;
+  const lowerMessage = message.toLowerCase();
+  if (
+    lowerMessage.includes('failed to fetch') ||
+    lowerMessage.includes('networkerror')
+  ) {
+    return '服务器连接失败，请确认后端服务已启动。';
+  }
+  if (lowerMessage.includes('405') || lowerMessage.includes('422')) {
+    return '登录接口异常，请检查后端服务。';
+  }
+  const labels: Record<string, string> = {
+    'invalid username or password': '用户名或密码不正确，请检查后重试。',
+    '账号或密码不正确': '账号或密码不正确',
+    'login code is required': '请输入密码。',
+    'not authenticated': '登录状态已失效，请重新登录。',
+    'session expired or invalid': '登录状态已失效，请重新登录。',
+    'admin only': '当前账号没有管理员权限。',
+    'own report only': '只能查看自己的报告。',
+  };
+  return labels[message] || message || fallback;
+}
+
 function displayRiskLevel(value: string | undefined) {
   return value ? riskLevelLabels[value] || value : '未评估';
+}
+
+function hypothesisTitle(item: DiagnosisHypothesis | undefined) {
+  if (!item) return '未命名诊断假设';
+  return (
+    item.title ||
+    item.ai_extracted_hypotheses[0]?.hypothesis_title ||
+    item.target_scope ||
+    `诊断假设 ${item.id ?? ''}`.trim()
+  );
+}
+
+function hypothesisDescription(item: DiagnosisHypothesis | undefined) {
+  if (!item) return '';
+  return (
+    item.description ||
+    item.ai_extracted_hypotheses[0]?.hypothesis_detail ||
+    item.hr_core_judgment ||
+    ''
+  );
 }
 
 function displayConditionType(value: string | undefined) {
@@ -636,6 +702,8 @@ function parseEmployeeRows(text: string) {
 export default function App() {
   const [activeModule, setActiveModule] = useState<Module>('home');
   const [activeTab, setActiveTab] = useState<Tab>('questionnaire');
+  const [review360Stage, setReview360Stage] =
+    useState<Review360Stage>('questionnaireDesign');
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [loginForm, setLoginForm] = useState({
     username: 'admin',
@@ -737,14 +805,29 @@ export default function App() {
     ExpertCouncilSession[]
   >([]);
   const [talentGenerationForm, setTalentGenerationForm] = useState({
+    hypothesis_ids: [] as number[],
     target_role: '管理者',
     target_level: '中层管理者',
   });
   const [modelQuestionForm, setModelQuestionForm] = useState({
+    title: '组织诊断与胜任力模型综合问卷',
+    purpose: '综合问卷',
     source_mode: 'combined' as 'org_diagnosis' | 'talent_model' | 'combined',
     hypothesis_id: '',
+    hypothesis_ids: [] as number[],
     model_id: '',
+    target_scope: '全体员工',
     target_level: '管理者',
+    total_question_count: 30,
+    questions_per_hypothesis: 2,
+    questions_per_dimension: 1,
+    open_question_count: 3,
+    rating_question_count: 21,
+    choice_question_count: 0,
+    review360_question_count: 6,
+    average_by_hypothesis: true,
+    weighted_by_dimension: false,
+    ai_auto_fill: true,
     relation_types: ['上级', '同级', '下级', '协作方'],
     question_count: 24,
     question_types: [
@@ -756,9 +839,6 @@ export default function App() {
     ],
     constraints: blankDiagnosis.constraints,
   });
-  const [modelGeneratedQuestions, setModelGeneratedQuestions] = useState<
-    ModelGeneratedQuestion[]
-  >([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState<number | null>(null);
   const [projectForm, setProjectForm] = useState(blankProject);
@@ -787,7 +867,39 @@ export default function App() {
   const [selectedSurveyId, setSelectedSurveyId] = useState<number | null>(null);
   const [selectedSurveyDetail, setSelectedSurveyDetail] =
     useState<SurveyDetail | null>(null);
+  const [editingSurveyId, setEditingSurveyId] = useState<number | null>(null);
+  const [surveyGenerationNotice, setSurveyGenerationNotice] = useState('');
+  const surveyDetailRef = useRef<HTMLDivElement | null>(null);
+  const [surveyQuestionFilters, setSurveyQuestionFilters] = useState({
+    hypothesis_id: '',
+    dimension_key: '',
+    model_id: '',
+    question_type: '',
+    target_role: '',
+  });
+  const [surveyAssignments, setSurveyAssignments] = useState<
+    SurveyAssignment[]
+  >([]);
+  const [assignmentForm, setAssignmentForm] = useState({
+    survey_id: '',
+    target_scope: '全体员工',
+    department: '',
+    role: '',
+    level: '',
+    employee_ids: [] as number[],
+    due_date: '',
+    anonymous: true,
+    allow_resubmit: false,
+    reminder_text: '请在截止时间前完成本次组织诊断问卷填写。',
+  });
+  const [orgChartText, setOrgChartText] = useState(
+    '姓名,部门,岗位,层级,直属上级\n张晨,产品部,产品经理,P7,王琳\n李明,产品部,产品专员,P5,张晨\n王琳,产品部,产品负责人,P9,',
+  );
+  const [parsedOrgEmployees, setParsedOrgEmployees] = useState<Employee[]>([]);
   const [surveyTasks, setSurveyTasks] = useState<Survey[]>([]);
+  const [selectedSurveyTask, setSelectedSurveyTask] = useState<Survey | null>(
+    null,
+  );
   const [organizationFeedbackItems, setOrganizationFeedbackItems] = useState<
     OrganizationFeedback[]
   >([]);
@@ -952,6 +1064,13 @@ export default function App() {
       setActiveModule('login');
       return;
     }
+    if (module === 'feedback') {
+      setReview360Stage('employeeFeedback');
+      setActiveModule('review360');
+      void loadFeedbackWorkspace();
+      void loadOrganizationFeedbackOS();
+      return;
+    }
     const leadershipModules: Module[] = [
       'executiveDashboard',
       'organizationDiagnosis',
@@ -961,6 +1080,9 @@ export default function App() {
     ];
     const hrModules: Module[] = [
       'projectWorkspace',
+      'projectList',
+      'diagnosisDesign',
+      'preDiagnosis',
       'executiveDashboard',
       'organizationDiagnosis',
       'talentOverview',
@@ -985,6 +1107,7 @@ export default function App() {
       'myCapabilityProfile',
       'organizationFeedback',
       'myGrowthReport',
+      'employee',
       'dashboard',
     ];
     if (false && !leadershipModules.includes(module)) {
@@ -1010,8 +1133,10 @@ export default function App() {
     const adminModules: Module[] = [
       'admin',
       'review360',
+      'diagnosisDesign',
+      'preDiagnosis',
       'diagnosis',
-      'talent',
+      'talentOverview',
       'rules',
       'orgDashboard',
       'diagnosisReports',
@@ -1025,15 +1150,26 @@ export default function App() {
     }
     setActiveModule(module);
     if (module === 'executiveDashboard') void loadExecutiveDashboard();
-    if (module === 'projectWorkspace')
+    if (module === 'projectWorkspace' || module === 'projectList')
       void loadHRWorkspace();
+    if (module === 'diagnosisDesign' || module === 'preDiagnosis')
+      void loadDiagnosisWorkspace();
     if (module === 'organizationDiagnosis') void loadOrganizationDiagnosisOS();
-    if (module === 'talentOverview') void loadTalentProfilesOS();
-    if (module === 'surveyCenter' || module === 'responseTracking')
+    if (module === 'talentOverview') {
+      void loadOrganizationDiagnosisOS();
+      void loadTalentWorkspace();
+    }
+    if (module === 'surveyCenter' || module === 'responseTracking') {
       void loadSurveysOS();
+      if (isHrUser) void loadStrategyReferences();
+    }
     if (module === 'dashboard') void loadDashboardOS();
-    if (module === 'reportsOS' || module === 'myGrowthReport')
+    if (module === 'reportsOS')
       void loadReportsOS();
+    if (module === 'myGrowthReport') {
+      void loadEmployeeOSWorkspace();
+      void loadOrganizationFeedbackOS();
+    }
     if (
       module === 'myTasks' ||
       module === 'surveys' ||
@@ -1044,7 +1180,6 @@ export default function App() {
     if (module === 'organizationFeedback') void loadOrganizationFeedbackOS();
     if (module === 'admin') void loadAdminWorkspace();
     if (module === 'employee') void loadEmployeeWorkspace();
-    if (module === 'feedback') void loadFeedbackWorkspace();
     if (module === 'diagnosis') void loadDiagnosisWorkspace();
     if (module === 'talent') void loadTalentWorkspace();
     if (module === 'rules') void loadRulesWorkspace();
@@ -1057,10 +1192,18 @@ export default function App() {
       void loadExpertCouncilSessions();
     }
     if (module === 'review360') {
+      setReview360Stage('questionnaireDesign');
       setActiveTab('questionnaire');
       if (projectId) void loadWorkspace(projectId);
       void loadStrategyReferences();
+      void loadSurveysOS();
+      void loadOrganizationFeedbackOS();
     }
+  }
+
+  function openReview360Stage(stage: Review360Stage) {
+    goModule('review360');
+    setReview360Stage(stage);
   }
 
   async function handleLogin(event: FormEvent) {
@@ -1091,7 +1234,7 @@ export default function App() {
         await loadHRWorkspace();
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : '登录失败');
+      setError(displayErrorMessage(err, '登录失败，请稍后重试。'));
     } finally {
       setBusy(false);
     }
@@ -1195,7 +1338,9 @@ export default function App() {
     }
     try {
       const [hypotheses, models] = await Promise.all([
-        api.get<DiagnosisHypothesis[]>(`/projects/${id}/diagnosis-hypotheses`),
+        api.get<DiagnosisHypothesis[]>(
+          `/projects/${id}/diagnosis-hypotheses?status=confirmed`,
+        ),
         api.get<TalentModel[]>(`/projects/${id}/talent-models`),
       ]);
       setDiagnosisList(hypotheses);
@@ -1255,6 +1400,17 @@ export default function App() {
       ]);
       setDiagnosisList(hypotheses);
       setTalentModels(models);
+      const confirmedIds = hypotheses
+        .filter((item) => item.status === 'confirmed' && item.id)
+        .map((item) => item.id as number);
+      setTalentGenerationForm((form) => ({
+        ...form,
+        hypothesis_ids: form.hypothesis_ids.length
+          ? form.hypothesis_ids.filter((idValue) =>
+              confirmedIds.includes(idValue),
+            )
+          : confirmedIds,
+      }));
       const selected =
         models.find((model) => model.id === selectedTalentModelId) ?? models[0];
       if (selected) {
@@ -1452,6 +1608,23 @@ export default function App() {
             form.evaluator_employee_id || employeeData[0].id,
         }));
       }
+      if (isHrUser) {
+        const [confirmedHypotheses, models, surveyData, orgQuestions] =
+          await Promise.all([
+            api.get<DiagnosisHypothesis[]>(
+              `/projects/${nextProjectId}/diagnosis-hypotheses?status=confirmed`,
+            ),
+            api.get<TalentModel[]>(`/projects/${nextProjectId}/talent-models`),
+            api.get<Survey[]>(`/projects/${nextProjectId}/survey-progress`),
+            api.get<{ dimensions: OrganizationDiagnosisDimension[] }>(
+              `/projects/${nextProjectId}/org-diagnosis/questions`,
+            ),
+          ]);
+        setDiagnosisList(confirmedHypotheses);
+        setTalentModels(models);
+        setSurveys(surveyData);
+        setOrgDiagnosisQuestions(orgQuestions.dimensions);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载项目数据失败');
     } finally {
@@ -1563,10 +1736,12 @@ export default function App() {
         );
         setSurveyTasks(tasks);
       } else {
-        const surveyData = await api.get<Survey[]>(
-          `/projects/${id}/survey-progress`,
-        );
+        const [surveyData, assignments] = await Promise.all([
+          api.get<Survey[]>(`/projects/${id}/survey-progress`),
+          api.get<SurveyAssignment[]>(`/projects/${id}/survey-assignments`),
+        ]);
         setSurveys(surveyData);
+        setSurveyAssignments(assignments);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载问卷中心失败');
@@ -1863,6 +2038,52 @@ export default function App() {
     );
   }
 
+  async function addAIRecommendedProjectDimension() {
+    if (!selectedProjectId) {
+      setNotice('请先前往项目中心创建或选择一个诊断项目');
+      return;
+    }
+    const confirmedHypothesis = diagnosisList.find(
+      (item) => item.status === 'confirmed',
+    );
+    const extracted = confirmedHypothesis?.ai_extracted_hypotheses[0];
+    const now = Date.now();
+    const title =
+      extracted?.hypothesis_title ||
+      confirmedHypothesis?.target_scope ||
+      '当前项目关键组织问题';
+    const focus =
+      extracted?.suggested_validation_method ||
+      confirmedHypothesis?.constraints ||
+      '围绕当前项目诊断目标，观察组织能力短板、协作阻力和管理行为证据。';
+    const nextDimensions = [
+      ...orgDiagnosisQuestions,
+      {
+        key: `project_ai_${now}`,
+        label: `项目化观察维度：${title}`,
+        description:
+          '这是基于当前项目诊断目标和已确认诊断假设生成的项目专属观察维度，不会修改系统默认八大维度。',
+        questions: [
+          {
+            key: `project_ai_${now}_1`,
+            text: `围绕「${title}」，当前团队有哪些可观察的行为、流程或协作证据？`,
+            score_min: 1,
+            score_max: 5,
+          },
+        ],
+        score: 3,
+        comments: '项目化维度，可与默认八大维度组合使用。',
+        evidence: focus,
+        sort_order: orgDiagnosisQuestions.length,
+      },
+    ];
+    setOrgDiagnosisQuestions(nextDimensions);
+    await persistOrgDiagnosisDimensions(
+      nextDimensions,
+      '已生成项目化观察维度',
+    );
+  }
+
   async function handleGenerateTalentProfilesOS() {
     const id = selectedProjectId;
     if (!id) return;
@@ -1902,6 +2123,8 @@ export default function App() {
         },
       );
       await loadSurveysOS();
+      await loadEmployeeOSWorkspace();
+      setSelectedSurveyTask(null);
       setNotice('问卷已提交');
     } catch (err) {
       setError(err instanceof Error ? err.message : '提交问卷失败');
@@ -1967,9 +2190,17 @@ export default function App() {
 
   useEffect(() => {
     if (!projectId) return;
+    setSelectedSurveyId(null);
+    setSelectedSurveyDetail(null);
+    setEditingSurveyId(null);
+    setSurveyGenerationNotice('');
     void loadWorkspace(projectId);
     if (activeModule === 'organizationDiagnosis') void loadOrganizationDiagnosisOS();
     if (activeModule === 'diagnosis') void loadDiagnosisWorkspace();
+    if (activeModule === 'talentOverview') {
+      void loadOrganizationDiagnosisOS();
+      void loadTalentWorkspace();
+    }
     if (activeModule === 'talent') void loadTalentWorkspace();
     if (activeModule === 'rules') void loadRulesWorkspace();
     if (activeModule === 'diagnosisReports') void loadDiagnosisReportsWorkspace();
@@ -1980,8 +2211,10 @@ export default function App() {
       void loadExpertCouncilSessions();
     }
     if (activeModule === 'review360') void loadStrategyReferences();
-    if (activeModule === 'surveyCenter' || activeModule === 'responseTracking')
+    if (activeModule === 'surveyCenter' || activeModule === 'responseTracking') {
       void loadSurveysOS();
+      if (isHrUser) void loadStrategyReferences();
+    }
   }, [projectId]);
 
   useEffect(() => {
@@ -2635,13 +2868,48 @@ export default function App() {
   async function handleGenerateProjectSurvey() {
     const id = selectedProjectId;
     if (!id) return;
+    const typeTotal =
+      modelQuestionForm.open_question_count +
+      modelQuestionForm.rating_question_count +
+      modelQuestionForm.choice_question_count +
+      modelQuestionForm.review360_question_count;
+    if (typeTotal > modelQuestionForm.total_question_count) {
+      setError('题型数量合计不能超过总题数，请调整生成配置。');
+      return;
+    }
     setBusy(true);
     setError('');
     try {
       const detail = await api.post<SurveyDetail>(
         `/projects/${id}/surveys/generate`,
         {
-          title: '组织诊断与胜任力综合问卷',
+          title: modelQuestionForm.title,
+          purpose: modelQuestionForm.purpose,
+          target_scope: modelQuestionForm.target_scope,
+          target_audience: modelQuestionForm.target_scope,
+          total_question_count: modelQuestionForm.total_question_count,
+          total_questions: modelQuestionForm.total_question_count,
+          questions_per_hypothesis: modelQuestionForm.questions_per_hypothesis,
+          questions_per_dimension: modelQuestionForm.questions_per_dimension,
+          open_question_count: modelQuestionForm.open_question_count,
+          rating_question_count: modelQuestionForm.rating_question_count,
+          choice_question_count: modelQuestionForm.choice_question_count,
+          review360_question_count: modelQuestionForm.review360_question_count,
+          question_type_counts: {
+            open_feedback: modelQuestionForm.open_question_count,
+            rating: modelQuestionForm.rating_question_count,
+            choice: modelQuestionForm.choice_question_count,
+            behavior_observation: modelQuestionForm.review360_question_count,
+          },
+          question_types: modelQuestionForm.question_types,
+          hypothesis_ids: modelQuestionForm.hypothesis_ids,
+          dimension_ids: [],
+          competency_model_ids: modelQuestionForm.model_id
+            ? [Number(modelQuestionForm.model_id)]
+            : [],
+          average_by_hypothesis: modelQuestionForm.average_by_hypothesis,
+          weighted_by_dimension: modelQuestionForm.weighted_by_dimension,
+          ai_auto_fill: modelQuestionForm.ai_auto_fill,
           source_mode: modelQuestionForm.source_mode,
           model_id: modelQuestionForm.model_id
             ? Number(modelQuestionForm.model_id)
@@ -2651,7 +2919,19 @@ export default function App() {
       );
       setSelectedSurveyId(detail.id);
       setSelectedSurveyDetail(detail);
+      setEditingSurveyId(null);
+      setSurveyGenerationNotice(
+        detail.questions.length < modelQuestionForm.total_question_count
+          ? `已生成 ${detail.questions.length} 题，少于目标 ${modelQuestionForm.total_question_count} 题。原因可能是已确认诊断假设、组织能力维度或胜任力模型的问题来源不足。`
+          : `已生成 ${detail.questions.length} 题。`,
+      );
       await loadSurveysOS();
+      setTimeout(() => {
+        surveyDetailRef.current?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        });
+      }, 0);
       setNotice('问卷已生成，并进入问卷中心统一管理');
     } catch (err) {
       setError(err instanceof Error ? err.message : '生成项目问卷失败');
@@ -2660,7 +2940,43 @@ export default function App() {
     }
   }
 
-  async function loadSurveyDetail(surveyId: number) {
+  function fillSurveyFormFromDetail(detail: SurveyDetail) {
+    const typeCounts = detail.questions.reduce<Record<string, number>>(
+      (acc, question) => ({
+        ...acc,
+        [question.question_type]: (acc[question.question_type] ?? 0) + 1,
+      }),
+      {},
+    );
+    const hypothesisIds = Array.from(
+      new Set(
+        detail.questions
+          .map((question) => question.hypothesis_id)
+          .filter((value): value is number => typeof value === 'number'),
+      ),
+    );
+    setModelQuestionForm((form) => ({
+      ...form,
+      title: detail.title,
+      purpose: detail.purpose || form.purpose,
+      target_scope: detail.target_scope || form.target_scope,
+      total_question_count: detail.total_question_count || detail.questions.length,
+      questions_per_hypothesis: Math.max(
+        form.questions_per_hypothesis,
+        hypothesisIds.length ? Math.ceil(detail.questions.length / hypothesisIds.length) : form.questions_per_hypothesis,
+      ),
+      questions_per_dimension: form.questions_per_dimension,
+      open_question_count: typeCounts.open_feedback ?? form.open_question_count,
+      rating_question_count: typeCounts.rating ?? form.rating_question_count,
+      choice_question_count: typeCounts.choice ?? form.choice_question_count,
+      review360_question_count:
+        (typeCounts.behavior_observation ?? 0) ||
+        form.review360_question_count,
+      hypothesis_ids: hypothesisIds.length ? hypothesisIds : form.hypothesis_ids,
+    }));
+  }
+
+  async function loadSurveyDetail(surveyId: number, options: { edit?: boolean } = {}) {
     const id = selectedProjectId;
     if (!id) return;
     setBusy(true);
@@ -2671,8 +2987,335 @@ export default function App() {
       );
       setSelectedSurveyId(surveyId);
       setSelectedSurveyDetail(detail);
+      if (options.edit) {
+        setEditingSurveyId(surveyId);
+        fillSurveyFormFromDetail(detail);
+        setReview360Stage('questionnaireGenerate');
+      } else {
+        setEditingSurveyId(null);
+        setSurveyGenerationNotice('');
+      }
+      setTimeout(() => {
+        surveyDetailRef.current?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        });
+      }, 0);
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载问卷详情失败');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function cancelSurveyEditing() {
+    setEditingSurveyId(null);
+    setSurveyGenerationNotice('');
+  }
+
+  function updateSelectedSurveyQuestion(
+    questionId: number,
+    patch: Partial<SurveyDetail['questions'][number]>,
+  ) {
+    setSelectedSurveyDetail((detail) =>
+      detail
+        ? {
+            ...detail,
+            questions: detail.questions.map((question) =>
+              question.id === questionId ? { ...question, ...patch } : question,
+            ),
+          }
+        : detail,
+    );
+  }
+
+  function addSurveyQuestion() {
+    setSelectedSurveyDetail((detail) =>
+      detail
+        ? {
+            ...detail,
+            questions: [
+              ...detail.questions,
+              {
+                id: -Date.now(),
+                project_id: detail.project_id,
+                survey_id: detail.id,
+                hypothesis_id: modelQuestionForm.hypothesis_ids[0] ?? null,
+                model_id: modelQuestionForm.model_id
+                  ? Number(modelQuestionForm.model_id)
+                  : null,
+                source_type: 'manual',
+                question_type: 'rating',
+                dimension_key: '',
+                dimension_label: '',
+                question_text: '请填写题目内容',
+                options: ['1', '2', '3', '4', '5'],
+                required: true,
+                target_role: modelQuestionForm.target_scope,
+                weight: 1,
+                source: 'manual',
+                status: 'draft',
+                sort_order: detail.questions.length,
+              },
+            ],
+          }
+        : detail,
+    );
+  }
+
+  function removeSurveyQuestion(questionId: number) {
+    setSelectedSurveyDetail((detail) =>
+      detail
+        ? {
+            ...detail,
+            questions: detail.questions.filter((question) => question.id !== questionId),
+          }
+        : detail,
+    );
+  }
+
+  function copySurveyQuestion(questionId: number) {
+    setSelectedSurveyDetail((detail) => {
+      if (!detail) return detail;
+      const source = detail.questions.find((question) => question.id === questionId);
+      if (!source) return detail;
+      return {
+        ...detail,
+        questions: [
+          ...detail.questions,
+          {
+            ...source,
+            id: -Date.now(),
+            question_text: `${source.question_text}（复制）`,
+            sort_order: detail.questions.length,
+            source: 'manual',
+            status: 'draft',
+          },
+        ],
+      };
+    });
+  }
+
+  function moveSurveyQuestion(questionId: number, direction: -1 | 1) {
+    setSelectedSurveyDetail((detail) => {
+      if (!detail) return detail;
+      const index = detail.questions.findIndex((question) => question.id === questionId);
+      const nextIndex = index + direction;
+      if (index < 0 || nextIndex < 0 || nextIndex >= detail.questions.length) return detail;
+      const questions = [...detail.questions];
+      [questions[index], questions[nextIndex]] = [questions[nextIndex], questions[index]];
+      return {
+        ...detail,
+        questions: questions.map((question, sortIndex) => ({
+          ...question,
+          sort_order: sortIndex,
+        })),
+      };
+    });
+  }
+
+  async function handleSaveSelectedSurvey() {
+    const id = selectedProjectId;
+    if (!id || !selectedSurveyDetail) return;
+    setBusy(true);
+    setError('');
+    try {
+      const saved = await api.put<SurveyDetail>(
+        `/projects/${id}/surveys/${selectedSurveyDetail.id}`,
+        {
+          title: editingSurveyId ? modelQuestionForm.title : selectedSurveyDetail.title,
+          description: selectedSurveyDetail.description,
+          purpose: editingSurveyId
+            ? modelQuestionForm.purpose
+            : selectedSurveyDetail.purpose ?? modelQuestionForm.purpose,
+          target_scope: editingSurveyId
+            ? modelQuestionForm.target_scope
+            : selectedSurveyDetail.target_scope ?? modelQuestionForm.target_scope,
+          total_question_count: selectedSurveyDetail.questions.length,
+          status: selectedSurveyDetail.status,
+          questions: selectedSurveyDetail.questions.map((question, index) => ({
+            ...question,
+            id: question.id > 0 ? question.id : null,
+            sort_order: index,
+          })),
+        },
+      );
+      setSelectedSurveyDetail(saved);
+      await loadSurveysOS();
+      setNotice(editingSurveyId ? '问卷修改已保存' : '问卷题目已保存');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存问卷题目失败');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleUpdateSurveyStatus(surveyId: number, status: Survey['status']) {
+    const id = selectedProjectId;
+    if (!id) return;
+    setBusy(true);
+    setError('');
+    try {
+      const detail =
+        status === 'disabled'
+          ? await api.post<SurveyDetail>(
+              `/projects/${id}/surveys/${surveyId}/deactivate`,
+            )
+          : await api.put<SurveyDetail>(
+              `/projects/${id}/surveys/${surveyId}/status`,
+              { status },
+            );
+      if (selectedSurveyId === surveyId) {
+        setSelectedSurveyDetail(detail);
+      }
+      await loadSurveysOS();
+      setNotice(status === 'disabled' ? '问卷已停用' : '问卷状态已更新');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '更新问卷状态失败');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDuplicateSurvey(surveyId: number) {
+    const id = selectedProjectId;
+    if (!id) return;
+    setBusy(true);
+    setError('');
+    try {
+      const copied = await api.post<SurveyDetail>(
+        `/projects/${id}/surveys/${surveyId}/copy`,
+      );
+      setSelectedSurveyId(copied.id);
+      setSelectedSurveyDetail(copied);
+      setEditingSurveyId(null);
+      await loadSurveysOS();
+      setTimeout(() => {
+        surveyDetailRef.current?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        });
+      }, 0);
+      setNotice('问卷已复制为草稿');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '复制问卷失败');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDeleteSurvey(surveyId: number) {
+    const id = selectedProjectId;
+    if (!id) return;
+    const confirmed = window.confirm(
+      '确认删除这份问卷吗？删除后不会影响已经提交的历史数据，但未发放的任务将不可继续使用。',
+    );
+    if (!confirmed) return;
+    setBusy(true);
+    setError('');
+    try {
+      await api.delete(`/projects/${id}/surveys/${surveyId}`);
+      if (selectedSurveyId === surveyId) {
+        setSelectedSurveyId(null);
+        setSelectedSurveyDetail(null);
+      }
+      await loadSurveysOS();
+      setNotice('问卷已删除，历史提交数据已保留');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '删除问卷失败');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function handleSendSurvey(surveyId: number) {
+    setAssignmentForm((form) => ({
+      ...form,
+      survey_id: String(surveyId),
+    }));
+    setReview360Stage('distribution');
+    setNotice('已进入问卷发放管理，请选择发放对象。');
+  }
+
+  async function handleCreateSurveyAssignments() {
+    const id = selectedProjectId;
+    if (!id || !assignmentForm.survey_id) {
+      setError('请先选择要发放的问卷');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      await api.post(`/projects/${id}/survey-assignments`, {
+        ...assignmentForm,
+        survey_id: Number(assignmentForm.survey_id),
+      });
+      const assignments = await api.get<SurveyAssignment[]>(
+        `/projects/${id}/survey-assignments`,
+      );
+      setSurveyAssignments(assignments);
+      await loadSurveysOS();
+      setNotice('问卷任务已发放');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '发放问卷失败');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleParseOrgChart() {
+    const id = selectedProjectId;
+    if (!id) return;
+    setBusy(true);
+    setError('');
+    try {
+      const result = await api.post<{ employees: Employee[] }>(
+        `/projects/${id}/org-chart/parse`,
+        { content: orgChartText },
+      );
+      setParsedOrgEmployees(result.employees);
+      setNotice('组织架构已解析，请检查后保存');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '解析组织架构失败');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleSaveParsedOrgEmployees() {
+    const id = selectedProjectId;
+    if (!id || !parsedOrgEmployees.length) return;
+    setBusy(true);
+    setError('');
+    try {
+      await api.post(`/projects/${id}/employees/bulk`, {
+        employees: parsedOrgEmployees,
+      });
+      await loadWorkspace(id);
+      setNotice('组织架构人员已保存到当前项目');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存组织架构失败');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleGenerateRelationshipsFromOrgChart() {
+    const id = selectedProjectId;
+    if (!id) return;
+    setBusy(true);
+    setError('');
+    try {
+      await api.post(`/projects/${id}/relationships/generate-from-org-chart`, {
+        include_self: true,
+        include_manager: true,
+        include_direct_report: true,
+        include_peer: true,
+      });
+      await loadWorkspace(id);
+      setNotice('已基于组织架构生成评价关系');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '生成评价关系失败');
     } finally {
       setBusy(false);
     }
@@ -2773,7 +3416,7 @@ export default function App() {
       );
       setDiagnosisDraft(confirmed);
       await loadDiagnosisWorkspace();
-      setNotice('诊断假设已确认，可进入胜任力模型生成');
+      setNotice('诊断假设已确认，可进入胜任力与画像');
     } catch (err) {
       setError(err instanceof Error ? err.message : '确认诊断假设失败');
     } finally {
@@ -2825,8 +3468,14 @@ export default function App() {
 
   async function handleGenerateTalentModel() {
     const id = selectedProjectId;
-    if (!talentDraft.hypothesis_id) {
-      setError('请先选择一个已确认的诊断假设');
+    const selectedHypothesisIds =
+      talentGenerationForm.hypothesis_ids.length > 0
+        ? talentGenerationForm.hypothesis_ids
+        : talentDraft.hypothesis_id
+          ? [talentDraft.hypothesis_id]
+          : [];
+    if (!selectedHypothesisIds.length) {
+      setError('请先选择至少一个已确认的诊断假设');
       return;
     }
     if (!id) {
@@ -2842,7 +3491,8 @@ export default function App() {
         used_fallback: boolean;
       }>('/talent/models/generate', {
         project_id: id,
-        hypothesis_id: talentDraft.hypothesis_id,
+        hypothesis_id: selectedHypothesisIds[0],
+        hypothesis_ids: selectedHypothesisIds,
         template: talentDraft.template || 'AI 原生管理者模型',
         target_role: talentGenerationForm.target_role,
         target_level: talentGenerationForm.target_level,
@@ -2987,7 +3637,6 @@ export default function App() {
     try {
       const result = await api.post<
         Questionnaire & {
-          questions: ModelGeneratedQuestion[];
           survey?: SurveyDetail;
           used_fallback?: boolean;
         }
@@ -3002,7 +3651,6 @@ export default function App() {
         constraints: modelQuestionForm.constraints,
       });
       setQuestionnaire(result);
-      setModelGeneratedQuestions(result.questions ?? []);
       if (result.survey) {
         setSelectedSurveyId(result.survey.id);
         setSelectedSurveyDetail(result.survey);
@@ -3424,148 +4072,16 @@ export default function App() {
     );
   }
 
-  function renderGlobalTopNav() {
-    const navButton = (module: Module, label: string) => (
-      <button
-        key={`${module}-${label}`}
-        className={`shrink-0 rounded-lg px-3 py-2 text-sm font-semibold transition ${
-          activeModule === module
-            ? 'bg-sky-600 text-white'
-            : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
-        }`}
-        onClick={() => goModule(module)}
-      >
-        {label}
-      </button>
-    );
-    const navGroup = (label: string, children: ReactNode) => (
-      <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1">
-        <span className="px-2 text-[11px] font-black uppercase tracking-wide text-slate-500">
-          {label}
-        </span>
-        <div className="flex flex-wrap gap-1">{children}</div>
-      </div>
-    );
-    return (
-      <div className="sticky top-0 z-50 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur lg:px-8">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3">
-          <button
-            className="flex items-center gap-3 text-left"
-            onClick={() => goModule('home')}
-          >
-            <span className="grid h-9 w-9 place-items-center rounded-lg bg-slate-950 text-white">
-              <Activity size={20} />
-            </span>
-            <span>
-              <span className="block text-sm font-black text-slate-950">
-                组织发展诊断平台
-              </span>
-              <span className="block text-xs text-slate-500">
-                组织发展诊断平台
-              </span>
-            </span>
-          </button>
-          <nav className="-mx-1 flex max-w-full flex-wrap gap-2 overflow-x-auto px-1">
-            {navButton('home', '首页')}
-            {isHrUser ? (
-              <>
-                {navGroup(
-                  '项目中心',
-                  <>
-                    {navButton('projectWorkspace', '项目中心')}
-                  </>,
-                )}
-                {navGroup(
-                  '诊断设计',
-                  <>
-                    {navButton('organizationDiagnosis', '诊断目标')}
-                    {navButton('diagnosis', '诊断假设与维度')}
-                    {navButton('talentOverview', '人才标准与画像')}
-                  </>,
-                )}
-                {navGroup(
-                  '证据收集',
-                  <>
-                    {navButton('review360', '问卷生成')}
-                    {navButton('surveyCenter', '问卷中心')}
-                    {navButton('responseTracking', '360评审')}
-                    {navButton('feedback', '员工反馈')}
-                  </>,
-                )}
-                {navButton('expertCouncil', 'AI专家诊断会')}
-                {navButton('orgDashboard', '数据洞察')}
-                {navButton('diagnosisReports', '报告与行动')}
-                {navButton('admin', '设置')}
-              </>
-            ) : null}
-            {currentUser?.role === 'employee' ? (
-              <>
-                {navButton('myTasks', '我的任务')}
-                {navButton('surveys', '问卷填写')}
-                {navButton('my360Feedback', '360反馈')}
-                {navButton('organizationFeedback', '员工反馈')}
-                {navButton('myCapabilityProfile', '能力画像')}
-                {navButton('myGrowthReport', '成长报告')}
-              </>
-            ) : null}
-            {!currentUser ? navButton('login', '登录') : null}
-          </nav>
-          <nav className="hidden">
-            {!currentUser ? navButton('home', '组织咨询首页') : null}
-            {currentUser?.role === 'admin' ? (
-              <>
-                {navButton('executiveDashboard', '管理总览')}
-                {navButton('organizationDiagnosis', '组织诊断')}
-                {navButton('talentOverview', '胜任力模型')}
-                {navButton('reportsOS', '报告')}
-              </>
-            ) : null}
-            {isHrUser ? (
-              <>
-                {navButton('projectWorkspace', '项目中心')}
-                {navButton('organizationDiagnosis', '组织诊断')}
-                {navButton('talentOverview', '胜任力模型')}
-                {navButton('review360', '问卷生成')}
-                {navButton('surveyCenter', '问卷中心')}
-                {navButton('responseTracking', '360评审')}
-                {navButton('dashboard', '数据看板')}
-                {navButton('reportsOS', '报告')}
-              </>
-            ) : null}
-            {currentUser?.role === 'employee' ? (
-              <>
-                {navButton('myTasks', '我的任务')}
-                {navButton('surveys', '问卷填写')}
-                {navButton('my360Feedback', '360反馈')}
-                {navButton('myCapabilityProfile', '能力画像')}
-                {navButton('organizationFeedback', '员工反馈')}
-                {navButton('myGrowthReport', '成长报告')}
-              </>
-            ) : null}
-            {!currentUser ? navButton('login', '登录') : null}
-          </nav>
-          {currentUser ? (
-            <div className="flex shrink-0 items-center gap-2">
-              <span className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">
-                {currentUser.role === 'admin' ? '管理员' : '员工'} ·{' '}
-                {currentUser.username}
-              </span>
-              <Button variant="secondary" onClick={handleLogout}>
-                退出登录
-              </Button>
-            </div>
-          ) : null}
-        </div>
-      </div>
-    );
-  }
-
   function renderGlobalTopNavClean() {
-    const navButton = (module: Module, label: string) => (
+    const navButton = (
+      module: Module,
+      label: string,
+      activeAliases: Module[] = [],
+    ) => (
       <button
         key={`${module}-${label}`}
         className={`shrink-0 rounded-lg px-3 py-2 text-sm font-semibold transition ${
-          activeModule === module
+          activeModule === module || activeAliases.includes(activeModule)
             ? 'bg-sky-600 text-white'
             : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
         }`}
@@ -3605,31 +4121,18 @@ export default function App() {
             {navButton('home', '首页')}
             {isHrUser ? (
               <>
-                {navGroup(
-                  '项目中心',
-                  <>
-                    {navButton('projectWorkspace', '项目列表')}
-                  </>,
-                )}
-                {navGroup(
-                  '诊断设计',
-                  <>
-                    {navButton('organizationDiagnosis', '组织能力维度')}
-                    {navButton('diagnosis', '诊断假设')}
-                    {navButton('talentOverview', '胜任力与画像')}
-                  </>,
-                )}
-                {navGroup(
-                  '证据收集',
-                  <>
-                    {navButton('review360', '问卷生成')}
-                    {navButton('surveyCenter', '问卷中心')}
-                    {navButton('responseTracking', '360评审')}
-                    {navButton('feedback', '员工反馈')}
-                  </>,
-                )}
-                {navButton('expertCouncil', 'AI专家诊断会')}
+                {navButton('projectWorkspace', '项目中心')}
+                {navButton('diagnosisDesign', '诊断设计', [
+                  'preDiagnosis',
+                  'diagnosis',
+                ])}
+                {navButton('talentOverview', '组织能力与胜任力', [
+                  'organizationDiagnosis',
+                  'talent',
+                ])}
+                {navButton('review360', '360 评审系统')}
                 {navButton('orgDashboard', '数据洞察')}
+                {navButton('expertCouncil', 'AI 专家诊断会')}
                 {navButton('diagnosisReports', '报告与行动')}
                 {navButton('admin', '设置')}
               </>
@@ -3637,11 +4140,9 @@ export default function App() {
             {currentUser?.role === 'employee' ? (
               <>
                 {navButton('myTasks', '我的任务')}
-                {navButton('surveys', '问卷填写')}
-                {navButton('my360Feedback', '360评审')}
-                {navButton('organizationFeedback', '员工反馈')}
-                {navButton('myCapabilityProfile', '能力画像')}
-                {navButton('myGrowthReport', '成长报告')}
+                {navButton('organizationFeedback', '开放反馈')}
+                {navButton('myGrowthReport', '填写记录')}
+                {navButton('employee', '帮助说明')}
               </>
             ) : null}
             {!currentUser ? navButton('login', '登录') : null}
@@ -3675,6 +4176,34 @@ export default function App() {
           </div>
         </header>
       </>
+    );
+  }
+
+  function renderInternalStepNav(
+    steps: Array<{ module: Module; label: string; aliases?: Module[] }>,
+  ) {
+    return (
+      <div className="flex flex-wrap gap-2 rounded-2xl border border-slate-200 bg-white p-2">
+        {steps.map((step) => {
+          const active =
+            activeModule === step.module ||
+            (step.aliases ?? []).includes(activeModule);
+          return (
+            <button
+              key={`${step.module}-${step.label}`}
+              type="button"
+              className={`rounded-lg px-3 py-2 text-sm font-bold ${
+                active
+                  ? 'bg-sky-600 text-white'
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
+              }`}
+              onClick={() => goModule(step.module)}
+            >
+              {step.label}
+            </button>
+          );
+        })}
+      </div>
     );
   }
 
@@ -3781,7 +4310,7 @@ export default function App() {
               '组织成熟度',
               dashboardData?.organization_maturity ?? 'L2 AI 流程增强型',
               dashboardData?.sample
-                ? 'Sample：暂无完整诊断数据'
+                ? '样例：暂无完整诊断数据'
                 : '基于组织诊断结果',
             )}
             {miniMetric(
@@ -3880,210 +4409,74 @@ export default function App() {
 
   function renderProjectWorkspacePage() {
     return renderOSPage('项目中心', renderProjectPage());
-    const steps = [
-      '项目设置',
-      '组织诊断',
-      '胜任力模型',
-      '问卷调研及回收',
-      '360 Review',
-      '诊断看板',
-      '报告生成',
-    ];
-    return renderOSPage(
-      '项目中心',
-      <>
-        <Panel
-          title="项目列表"
-          eyebrow="项目工作台"
-          actions={
-            <Button onClick={() => goModule('projectWorkspace')}>
-              <Plus size={16} />
-              创建项目
-            </Button>
-          }
-        >
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-left text-sm">
-              <thead className="text-xs uppercase text-slate-500">
-                <tr>
-                  <th className="px-3 py-2">项目名称</th>
-                  <th className="px-3 py-2">项目类型</th>
-                  <th className="px-3 py-2">状态</th>
-                  <th className="px-3 py-2">开始时间</th>
-                  <th className="px-3 py-2">结束时间</th>
-                  <th className="px-3 py-2">问卷回收率</th>
-                  <th className="px-3 py-2">报告</th>
-                </tr>
-              </thead>
-              <tbody>
-                {projects.map((project) => (
-                  <tr key={project.id} className="border-t border-slate-100">
-                    <td className="px-3 py-3 font-semibold text-slate-900">
-                      {project.name}
-                    </td>
-                    <td className="px-3 py-3">{project.project_type}</td>
-                    <td className="px-3 py-3">
-                      {displayStatus(project.status)}
-                    </td>
-                    <td className="px-3 py-3">{project.start_date || '-'}</td>
-                    <td className="px-3 py-3">{project.end_date || '-'}</td>
-                    <td className="px-3 py-3">
-                      {surveys[0]?.completion_rate ?? 0}%
-                    </td>
-                    <td className="px-3 py-3">
-                      {osReports.length ? '已生成' : '未生成'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Panel>
-        <Panel title="项目详情链路" eyebrow="项目流程">
-          <div className="grid gap-3 md:grid-cols-7">
-            {steps.map((step, index) => (
-              <div
-                key={step}
-                className="rounded-lg border border-sky-100 bg-sky-50 p-3 text-center"
-              >
-                <p className="text-xs font-black text-sky-700">{index + 1}</p>
-                <p className="mt-1 text-sm font-semibold text-slate-800">
-                  {step}
-                </p>
-              </div>
-            ))}
-          </div>
-        </Panel>
-      </>,
-    );
   }
 
   function renderCreateProjectPage() {
     return renderOSPage('项目中心', renderProjectPage());
-    return renderOSPage(
-      '创建项目',
-      <Panel title="创建 / 编辑项目" eyebrow="管理员配置">
-        <form className="grid gap-4" onSubmit={handleProjectSubmit}>
-          <div className="grid gap-4 md:grid-cols-2">
-            <Field label="项目名称">
-              <input
-                className={inputClass}
-                value={projectForm.name}
-                onChange={(e) =>
-                  setProjectForm({ ...projectForm, name: e.target.value })
-                }
-                required
-              />
-            </Field>
-            <Field label="项目类型">
-              <select
-                className={inputClass}
-                value={projectForm.project_type}
-                onChange={(e) =>
-                  setProjectForm({
-                    ...projectForm,
-                    project_type: e.target.value as Project['project_type'],
-                  })
-                }
-              >
-                <option value="combined">combined</option>
-                <option value="org_diagnosis">org_diagnosis</option>
-                <option value="review_360">review_360</option>
-              </select>
-            </Field>
-          </div>
-          <Field label="描述">
-            <textarea
-              className={textareaClass}
-              value={projectForm.description}
-              onChange={(e) =>
-                setProjectForm({
-                  ...projectForm,
-                  description: e.target.value,
-                  purpose: e.target.value,
-                })
-              }
-            />
-          </Field>
-          <div className="grid gap-4 md:grid-cols-3">
-            <Field label="诊断范围">
-              <input
-                className={inputClass}
-                value={projectForm.target_scope}
-                onChange={(e) =>
-                  setProjectForm({
-                    ...projectForm,
-                    target_scope: e.target.value,
-                    scope: e.target.value,
-                  })
-                }
-              />
-            </Field>
-            <Field label="开始时间">
-              <input
-                className={inputClass}
-                type="date"
-                value={projectForm.start_date}
-                onChange={(e) =>
-                  setProjectForm({ ...projectForm, start_date: e.target.value })
-                }
-              />
-            </Field>
-            <Field label="结束时间">
-              <input
-                className={inputClass}
-                type="date"
-                value={projectForm.end_date}
-                onChange={(e) =>
-                  setProjectForm({ ...projectForm, end_date: e.target.value })
-                }
-              />
-            </Field>
-          </div>
-          <Button disabled={busy}>
-            <Save size={16} />
-            保存项目
-          </Button>
-        </form>
-      </Panel>,
-    );
   }
 
   function renderOrganizationDiagnosisOSPage() {
     return renderOSPage(
-      '组织能力诊断',
+      '组织能力维度',
       <>
+        {renderInternalStepNav([
+          { module: 'organizationDiagnosis', label: '组织能力维度' },
+          { module: 'talentOverview', label: '胜任力与画像', aliases: ['talent'] },
+        ])}
         <Panel
-          title="八大组织能力诊断"
-          eyebrow="组织能力维度"
+          title="组织能力维度"
+          eyebrow="默认框架 + 项目化观察维度"
           actions={
             <>
               {renderProjectSelector()}
+              <Button
+                variant="secondary"
+                onClick={restoreDefaultOrgDiagnosisDimensions}
+                disabled={busy || !selectedProjectId}
+              >
+                使用默认八大维度
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={addAIRecommendedProjectDimension}
+                disabled={busy || !selectedProjectId}
+              >
+                <Sparkles size={16} />
+                AI 生成项目化维度
+              </Button>
               <Button
                 variant="secondary"
                 onClick={addAndPersistOrgDiagnosisDimension}
                 disabled={busy || !selectedProjectId}
               >
                 <Plus size={16} />
-                新增组织能力维度
-              </Button>
-              <Button
-                variant="secondary"
-                onClick={restoreDefaultOrgDiagnosisDimensions}
-                disabled={busy || !selectedProjectId}
-              >
-                恢复默认八大维度
+                新增项目维度
               </Button>
               <Button
                 onClick={handleSaveOrgDiagnosis}
                 disabled={busy || !selectedProjectId}
               >
                 <Save size={16} />
-                保存维度
+                保存当前项目维度
               </Button>
             </>
           }
         >
+          <div className="mb-4 grid gap-3 rounded-2xl border border-sky-100 bg-sky-50/80 p-4 text-sm leading-6 text-slate-700">
+            <p>
+              系统内置默认八大组织能力维度，作为组织诊断的基础观察框架。管理员可以在当前项目中引用默认维度，也可以让 AI 根据诊断假设生成项目化观察维度，并与默认维度组合使用。
+            </p>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="rounded-xl bg-white/80 p-3">
+                <p className="font-bold text-slate-950">默认八大维度</p>
+                <p>这是系统底座，用于提供长期稳定的组织能力观察框架。</p>
+              </div>
+              <div className="rounded-xl bg-white/80 p-3">
+                <p className="font-bold text-slate-950">项目化观察维度</p>
+                <p>绑定当前项目，可引用默认维度、使用 AI 推荐维度或手动新增补充维度。</p>
+              </div>
+            </div>
+          </div>
           <div className="mb-4 grid gap-3 md:grid-cols-3">
             {miniMetric(
               '成熟度',
@@ -4259,6 +4652,7 @@ export default function App() {
   }
 
   function renderTalentOverviewPage() {
+    if (isHrUser) return renderTalentModelPage();
     const distribution = executiveDashboard?.talent_distribution ?? [];
     return renderOSPage(
       '人才画像',
@@ -4290,7 +4684,7 @@ export default function App() {
                 }
               >
                 <p className="text-sm font-black text-slate-950">
-                  {profile.username ?? `User ${profile.user_id}`}
+                  {profile.username ?? `用户 ${profile.user_id}`}
                 </p>
                 <p className="mt-1 text-sm font-semibold text-sky-700">
                   {profile.talent_type_label ?? profile.talent_type}
@@ -4306,7 +4700,7 @@ export default function App() {
           <div className="mt-5 rounded-lg border border-sky-200 bg-sky-50 p-4">
             <p className="text-sm font-black text-slate-950">
               {selectedTalentProfile.username ??
-                `User ${selectedTalentProfile.user_id}`}{' '}
+                `用户 ${selectedTalentProfile.user_id}`}{' '}
               · {selectedTalentProfile.talent_type_label}
             </p>
             <div className="mt-3 grid gap-3 md:grid-cols-2">
@@ -4519,6 +4913,1155 @@ export default function App() {
           )}
         </div>
       </Panel>,
+    );
+  }
+
+  function renderReview360SystemPage() {
+    const stageOptions: Array<{
+      key: Review360Stage;
+      label: string;
+      body: string;
+    }> = [
+      {
+        key: 'questionnaireDesign',
+        label: '问卷设计',
+        body: '定义本次诊断要收集哪些证据。',
+      },
+      {
+        key: 'questionnaireGenerate',
+        label: '问卷生成',
+        body: '根据设计生成组织诊断、胜任力、360 评审和开放反馈题。',
+      },
+      {
+        key: 'distribution',
+        label: '问卷发放管理',
+        body: '管理发放对象、评价关系、状态和提醒。',
+      },
+      {
+        key: 'dataCollection',
+        label: '数据收集',
+        body: '查看完成率、题目统计、维度统计和开放题文本。',
+      },
+      {
+        key: 'employeeFeedback',
+        label: '员工反馈',
+        body: '汇总员工真实声音并形成主题聚类。',
+      },
+    ];
+
+    const stageButton = (stage: (typeof stageOptions)[number]) => (
+      <button
+        key={stage.key}
+        type="button"
+        className={`rounded-lg border px-3 py-2 text-left transition ${
+          review360Stage === stage.key
+            ? 'border-sky-300 bg-sky-50 text-sky-900'
+            : 'border-slate-200 bg-white text-slate-600 hover:border-sky-200 hover:bg-slate-50'
+        }`}
+        onClick={() => setReview360Stage(stage.key)}
+      >
+        <span className="block text-sm font-black">{stage.label}</span>
+        <span className="mt-1 block text-xs leading-5">{stage.body}</span>
+      </button>
+    );
+
+    const renderSurveyList = () => (
+      <Panel title="已生成问卷">
+        <div className="grid gap-3">
+          {surveys.length ? (
+            surveys.map((survey) => (
+              <div
+                key={survey.id}
+                className={`grid gap-3 rounded-lg border p-4 transition ${
+                  selectedSurveyId === survey.id
+                    ? 'border-sky-300 bg-sky-50'
+                    : 'border-slate-200 bg-slate-50 hover:border-sky-300 hover:bg-sky-50'
+                }`}
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <button
+                    type="button"
+                    className="text-left"
+                    onClick={() => void loadSurveyDetail(survey.id)}
+                  >
+                    <p className="font-bold text-slate-950">{survey.title}</p>
+                    <p className="text-sm text-slate-500">
+                      {surveyTypeLabels[survey.survey_type] ||
+                        survey.survey_type}{' '}
+                      · {displayStatus(survey.status)} ·{' '}
+                      {survey.question_count ?? 0} 题
+                    </p>
+                  </button>
+                  <span className="rounded-lg bg-white px-3 py-2 text-sm font-black text-sky-700">
+                    {survey.completion_rate ?? 0}% 完成
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="secondary" onClick={() => void loadSurveyDetail(survey.id)}>
+                    查看题目
+                  </Button>
+                  <Button variant="secondary" onClick={() => void loadSurveyDetail(survey.id, { edit: true })}>
+                    编辑问卷
+                  </Button>
+                  <Button variant="secondary" onClick={() => void handleDuplicateSurvey(survey.id)} disabled={busy}>
+                    复制问卷
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    onClick={() => void handleUpdateSurveyStatus(survey.id, 'disabled')}
+                    disabled={busy || survey.status === 'disabled'}
+                  >
+                    停用问卷
+                  </Button>
+                  <Button variant="secondary" onClick={() => handleSendSurvey(survey.id)}>
+                    发放问卷
+                  </Button>
+                  <Button variant="danger" onClick={() => void handleDeleteSurvey(survey.id)} disabled={busy}>
+                    删除问卷
+                  </Button>
+                </div>
+              </div>
+            ))
+          ) : (
+            <EmptyState
+              title="暂无问卷"
+              body="当前项目还没有保存问卷。请先根据已确认诊断假设、组织能力维度和胜任力与画像生成综合问卷。"
+            />
+          )}
+        </div>
+      </Panel>
+    );
+
+    const renderSurveyDetail = () => {
+      if (!selectedSurveyDetail) return null;
+      const filteredQuestions = selectedSurveyDetail.questions.filter(
+        (question) =>
+          (!surveyQuestionFilters.hypothesis_id ||
+            String(question.hypothesis_id ?? '') ===
+              surveyQuestionFilters.hypothesis_id) &&
+          (!surveyQuestionFilters.dimension_key ||
+            question.dimension_key === surveyQuestionFilters.dimension_key) &&
+          (!surveyQuestionFilters.model_id ||
+            String(question.model_id ?? '') === surveyQuestionFilters.model_id) &&
+          (!surveyQuestionFilters.question_type ||
+            question.question_type === surveyQuestionFilters.question_type) &&
+          (!surveyQuestionFilters.target_role ||
+            question.target_role === surveyQuestionFilters.target_role),
+      );
+      const byHypothesis = diagnosisList
+        .filter((item) => item.status === 'confirmed')
+        .map((hypothesis) => {
+          const questions = selectedSurveyDetail.questions.filter(
+            (question) => question.hypothesis_id === hypothesis.id,
+          );
+          const typeCounts = questions.reduce<Record<string, number>>(
+            (acc, question) => ({
+              ...acc,
+              [question.question_type]: (acc[question.question_type] ?? 0) + 1,
+            }),
+            {},
+          );
+          return { hypothesis, questions, typeCounts };
+        });
+      return (
+        <div ref={surveyDetailRef}>
+          <Panel
+            title={editingSurveyId ? '题目清单与管理（编辑中）' : '题目清单与管理'}
+            actions={
+              <>
+                <Button variant="secondary" onClick={addSurveyQuestion}>
+                  <Plus size={16} />
+                  新增题目
+                </Button>
+                {editingSurveyId ? (
+                  <Button variant="secondary" onClick={cancelSurveyEditing}>
+                    取消编辑
+                  </Button>
+                ) : null}
+                <Button onClick={handleSaveSelectedSurvey} disabled={busy}>
+                  <Save size={16} />
+                  {editingSurveyId ? '保存问卷修改' : '保存问卷'}
+                </Button>
+              </>
+            }
+          >
+          <div className="mb-4 grid gap-3 rounded-lg border border-slate-200 bg-white p-4 text-sm md:grid-cols-3">
+            <div>
+              <p className="text-xs font-bold text-slate-500">问卷名称</p>
+              <p className="mt-1 font-black text-slate-950">{selectedSurveyDetail.title}</p>
+            </div>
+            <div>
+              <p className="text-xs font-bold text-slate-500">问卷用途</p>
+              <p className="mt-1 text-slate-700">{selectedSurveyDetail.purpose || '未设置'}</p>
+            </div>
+            <div>
+              <p className="text-xs font-bold text-slate-500">主要针对对象</p>
+              <p className="mt-1 text-slate-700">{selectedSurveyDetail.target_scope || '未设置'}</p>
+            </div>
+            <div>
+              <p className="text-xs font-bold text-slate-500">问卷状态</p>
+              <p className="mt-1 text-slate-700">{displayStatus(selectedSurveyDetail.status)}</p>
+            </div>
+            <div>
+              <p className="text-xs font-bold text-slate-500">题目总数</p>
+              <p className="mt-1 text-slate-700">{selectedSurveyDetail.questions.length} 题</p>
+            </div>
+            <div>
+              <p className="text-xs font-bold text-slate-500">完成率</p>
+              <p className="mt-1 text-slate-700">{selectedSurveyDetail.completion_rate ?? 0}%</p>
+            </div>
+          </div>
+          {surveyGenerationNotice ? (
+            <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-900">
+              {surveyGenerationNotice}
+            </div>
+          ) : null}
+          <div className="mb-4 grid gap-3 rounded-lg border border-sky-100 bg-sky-50 p-3 text-sm">
+            <p className="font-bold text-slate-950">
+              每个诊断假设当前题目数量
+            </p>
+            <div className="grid gap-2 md:grid-cols-3">
+              {byHypothesis.map(({ hypothesis, questions, typeCounts }) => (
+                <div key={hypothesis.id} className="rounded-lg bg-white p-3">
+                  <p className="font-semibold text-slate-900">
+                    {hypothesisTitle(hypothesis)}
+                  </p>
+                  <p className="mt-1 text-slate-600">
+                    {questions.length} 题 ·{' '}
+                    {Object.entries(typeCounts)
+                      .map(
+                        ([type, count]) =>
+                          `${questionTypeLabels[type] || type} ${count}`,
+                      )
+                      .join('、') || '暂无题目'}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="mb-4 grid gap-3 md:grid-cols-5">
+            <Field label="按诊断假设筛选">
+              <select
+                className={inputClass}
+                value={surveyQuestionFilters.hypothesis_id}
+                onChange={(event) =>
+                  setSurveyQuestionFilters({
+                    ...surveyQuestionFilters,
+                    hypothesis_id: event.target.value,
+                  })
+                }
+              >
+                <option value="">全部</option>
+                {diagnosisList
+                  .filter((item) => item.status === 'confirmed')
+                  .map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {hypothesisTitle(item)}
+                    </option>
+                  ))}
+              </select>
+            </Field>
+            <Field label="按组织能力维度筛选">
+              <select
+                className={inputClass}
+                value={surveyQuestionFilters.dimension_key}
+                onChange={(event) =>
+                  setSurveyQuestionFilters({
+                    ...surveyQuestionFilters,
+                    dimension_key: event.target.value,
+                  })
+                }
+              >
+                <option value="">全部</option>
+                {Array.from(
+                  new Set(
+                    selectedSurveyDetail.questions.map(
+                      (question) => question.dimension_key,
+                    ),
+                  ),
+                )
+                  .filter(Boolean)
+                  .map((dimensionKey) => (
+                    <option key={dimensionKey}>{dimensionKey}</option>
+                  ))}
+              </select>
+            </Field>
+            <Field label="按胜任力模型筛选">
+              <select
+                className={inputClass}
+                value={surveyQuestionFilters.model_id}
+                onChange={(event) =>
+                  setSurveyQuestionFilters({
+                    ...surveyQuestionFilters,
+                    model_id: event.target.value,
+                  })
+                }
+              >
+                <option value="">全部</option>
+                {talentModels.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="按题型筛选">
+              <select
+                className={inputClass}
+                value={surveyQuestionFilters.question_type}
+                onChange={(event) =>
+                  setSurveyQuestionFilters({
+                    ...surveyQuestionFilters,
+                    question_type: event.target.value,
+                  })
+                }
+              >
+                <option value="">全部</option>
+                {Object.entries(questionTypeLabels).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="按目标对象筛选">
+              <input
+                className={inputClass}
+                value={surveyQuestionFilters.target_role}
+                onChange={(event) =>
+                  setSurveyQuestionFilters({
+                    ...surveyQuestionFilters,
+                    target_role: event.target.value,
+                  })
+                }
+                placeholder="例如：管理者"
+              />
+            </Field>
+          </div>
+          <div className="grid gap-3">
+            {filteredQuestions.length ? filteredQuestions.map((question, index) => (
+              <div
+                key={question.id}
+                className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap gap-2">
+                    <span className="rounded-lg bg-white px-2 py-1 font-bold text-sky-700">
+                      {sourceTypeLabels[question.source_type] ||
+                        question.source_type}
+                    </span>
+                    <span className="rounded-lg bg-white px-2 py-1 font-bold text-slate-700">
+                      {questionTypeLabels[question.question_type] ||
+                        question.question_type}
+                    </span>
+                    <span className="rounded-lg bg-white px-2 py-1 text-slate-600">
+                      权重 {question.weight ?? 1}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="secondary" onClick={() => moveSurveyQuestion(question.id, -1)}>
+                      上移
+                    </Button>
+                    <Button variant="secondary" onClick={() => moveSurveyQuestion(question.id, 1)}>
+                      下移
+                    </Button>
+                    <Button variant="secondary" onClick={() => copySurveyQuestion(question.id)}>
+                      复制
+                    </Button>
+                    <Button variant="danger" onClick={() => removeSurveyQuestion(question.id)}>
+                      删除
+                    </Button>
+                  </div>
+                </div>
+                <Field label={`题目内容 ${index + 1}`}>
+                  <textarea
+                    className={textareaClass}
+                    value={question.question_text}
+                    onChange={(event) =>
+                      updateSelectedSurveyQuestion(question.id, {
+                        question_text: event.target.value,
+                      })
+                    }
+                  />
+                </Field>
+                <div className="grid gap-3 md:grid-cols-4">
+                  <Field label="题目类型">
+                    <select
+                      className={inputClass}
+                      value={question.question_type}
+                      onChange={(event) =>
+                        updateSelectedSurveyQuestion(question.id, {
+                          question_type: event.target.value,
+                        })
+                      }
+                    >
+                      {Object.entries(questionTypeLabels).map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="选项 / 量表说明">
+                    <input
+                      className={inputClass}
+                      value={(question.options ?? []).join('、')}
+                      onChange={(event) =>
+                        updateSelectedSurveyQuestion(question.id, {
+                          options: event.target.value
+                            .split(/[、,，]/)
+                            .map((item) => item.trim())
+                            .filter(Boolean),
+                        })
+                      }
+                    />
+                  </Field>
+                  <Field label="目标对象">
+                    <input
+                      className={inputClass}
+                      value={question.target_role ?? ''}
+                      onChange={(event) =>
+                        updateSelectedSurveyQuestion(question.id, {
+                          target_role: event.target.value,
+                        })
+                      }
+                    />
+                  </Field>
+                  <Field label="题目权重">
+                    <input
+                      className={inputClass}
+                      type="number"
+                      step="0.1"
+                      value={question.weight ?? 1}
+                      onChange={(event) =>
+                        updateSelectedSurveyQuestion(question.id, {
+                          weight: Number(event.target.value),
+                        })
+                      }
+                    />
+                  </Field>
+                  <Field label="对应诊断假设">
+                    <select
+                      className={inputClass}
+                      value={question.hypothesis_id ?? ''}
+                      onChange={(event) =>
+                        updateSelectedSurveyQuestion(question.id, {
+                          hypothesis_id: event.target.value
+                            ? Number(event.target.value)
+                            : null,
+                        })
+                      }
+                    >
+                      <option value="">不关联</option>
+                      {diagnosisList
+                        .filter((item) => item.status === 'confirmed')
+                        .map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {hypothesisTitle(item)}
+                          </option>
+                        ))}
+                    </select>
+                  </Field>
+                  <Field label="对应组织能力维度">
+                    <input
+                      className={inputClass}
+                      value={question.dimension_label || question.dimension_key}
+                      onChange={(event) =>
+                        updateSelectedSurveyQuestion(question.id, {
+                          dimension_label: event.target.value,
+                          dimension_key: event.target.value,
+                        })
+                      }
+                    />
+                  </Field>
+                  <Field label="对应胜任力模型">
+                    <select
+                      className={inputClass}
+                      value={question.model_id ?? ''}
+                      onChange={(event) =>
+                        updateSelectedSurveyQuestion(question.id, {
+                          model_id: event.target.value
+                            ? Number(event.target.value)
+                            : null,
+                        })
+                      }
+                    >
+                      <option value="">不关联</option>
+                      {talentModels.map((model) => (
+                        <option key={model.id} value={model.id}>
+                          {model.name}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="使用状态">
+                    <select
+                      className={inputClass}
+                      value={question.status ?? 'draft'}
+                      onChange={(event) =>
+                        updateSelectedSurveyQuestion(question.id, {
+                          status: event.target.value,
+                        })
+                      }
+                    >
+                      <option value="draft">草稿</option>
+                      <option value="active">已启用</option>
+                      <option value="disabled">已停用</option>
+                    </select>
+                  </Field>
+                </div>
+                <label className="flex items-center gap-2 text-sm font-semibold text-slate-600">
+                  <input
+                    type="checkbox"
+                    checked={question.required}
+                    onChange={(event) =>
+                      updateSelectedSurveyQuestion(question.id, {
+                        required: event.target.checked,
+                      })
+                    }
+                  />
+                  必填
+                </label>
+              </div>
+            )) : (
+              <EmptyState
+                title="这份问卷暂无题目"
+                body="这份问卷暂无题目，请点击编辑问卷或重新生成题目。"
+              />
+            )}
+          </div>
+          </Panel>
+        </div>
+      );
+    };
+
+    const renderStageContent = () => {
+      if (review360Stage === 'questionnaireDesign') {
+        return (
+          <div className="grid gap-5">
+            <Panel
+              title="问卷设计"
+              eyebrow="证据收集方案"
+              actions={
+                <>
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      setNotice('问卷设计已保存，请进入问卷生成生成具体题目。');
+                    }}
+                  >
+                    保存问卷设计
+                  </Button>
+                  <Button onClick={() => setReview360Stage('questionnaireGenerate')}>
+                    进入问卷生成
+                  </Button>
+                </>
+              }
+            >
+              <div className="grid gap-4 text-sm leading-6 text-slate-700">
+                <p>
+                  问卷设计只负责确定证据收集方案，不直接生成最终问卷。请在这里确认要验证哪些诊断假设、覆盖哪些组织能力维度、引用哪些胜任力模型、采用哪些题型和评审关系。
+                </p>
+                <div className="grid gap-3 md:grid-cols-3">
+                  {miniMetric('已确认诊断假设', diagnosisList.filter((item) => item.status === 'confirmed').length)}
+                  {miniMetric('组织能力维度', orgDiagnosisQuestions.length)}
+                  {miniMetric('胜任力模型', talentModels.length)}
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <Field label="本次问卷要验证的诊断假设">
+                    <div className="grid max-h-64 gap-2 overflow-auto rounded-lg border border-slate-200 bg-white p-3">
+                      {diagnosisList
+                        .filter((item) => item.status === 'confirmed')
+                        .map((item) => {
+                          const idValue = item.id;
+                          if (!idValue) return null;
+                          return (
+                            <label key={idValue} className="flex gap-2 text-sm">
+                              <input
+                                type="checkbox"
+                                checked={modelQuestionForm.hypothesis_ids.includes(idValue)}
+                                onChange={(event) =>
+                                  setModelQuestionForm({
+                                    ...modelQuestionForm,
+                                    hypothesis_ids: event.target.checked
+                                      ? [...modelQuestionForm.hypothesis_ids, idValue]
+                                      : modelQuestionForm.hypothesis_ids.filter((id) => id !== idValue),
+                                  })
+                                }
+                              />
+                              <span>
+                                {hypothesisTitle(item)}
+                              </span>
+                            </label>
+                          );
+                        })}
+                    </div>
+                  </Field>
+                  <Field label="题目结构建议">
+                    <textarea
+                      className={textareaClass}
+                      value={modelQuestionForm.constraints}
+                      onChange={(event) =>
+                        setModelQuestionForm({
+                          ...modelQuestionForm,
+                          constraints: event.target.value,
+                        })
+                      }
+                    />
+                  </Field>
+                  <Field label="主要针对对象">
+                    <select
+                      className={inputClass}
+                      value={modelQuestionForm.target_scope}
+                      onChange={(event) =>
+                        setModelQuestionForm({
+                          ...modelQuestionForm,
+                          target_scope: event.target.value,
+                        })
+                      }
+                    >
+                      {['全体员工', '管理者', '中层管理者', '高层管理者', '一线员工', '指定部门', '指定岗位', '指定人员'].map((option) => (
+                        <option key={option}>{option}</option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="题目类型比例">
+                    <div className="grid gap-2 rounded-lg border border-slate-200 bg-white p-3">
+                      <p>量表题：{modelQuestionForm.rating_question_count} 题</p>
+                      <p>360 评价题：{modelQuestionForm.review360_question_count} 题</p>
+                      <p>开放反馈题：{modelQuestionForm.open_question_count} 题</p>
+                      <p>选择题：{modelQuestionForm.choice_question_count} 题</p>
+                    </div>
+                  </Field>
+                </div>
+              </div>
+            </Panel>
+          </div>
+        );
+      }
+      if (review360Stage === 'questionnaireGenerate') {
+        return (
+          <div className="grid gap-5">
+            <Panel title="问卷生成定位" eyebrow="证据收集工具">
+              <div className="grid gap-3 text-sm leading-6 text-slate-700">
+                <p>
+                  组织诊断假设回答：当前组织可能出了什么问题？组织能力维度回答：我们从哪些组织能力角度观察问题？胜任力模型回答：解决这些组织问题，需要管理者和员工具备哪些能力与行为？诊断问卷回答：我们如何收集证据，验证这些假设和能力差距？
+                </p>
+                <p>
+                  问卷不是独立功能，而是证据收集工具。系统会把已确认的诊断假设、组织能力维度和胜任力模型转化为可填写的问题，用来支持后续的数据洞察、AI 专家诊断会、诊断报告和行动计划。
+                </p>
+              </div>
+            </Panel>
+            <Panel
+              title="生成配置"
+              actions={
+                editingSurveyId ? (
+                  <>
+                    <Button onClick={handleSaveSelectedSurvey} disabled={busy}>
+                      <Save size={16} />
+                      保存问卷修改
+                    </Button>
+                    <Button variant="secondary" onClick={cancelSurveyEditing}>
+                      取消编辑
+                    </Button>
+                  </>
+                ) : (
+                  <Button
+                    onClick={handleGenerateProjectSurvey}
+                    disabled={busy || !selectedProjectId}
+                  >
+                    <Sparkles size={16} />
+                    生成问卷
+                  </Button>
+                )
+              }
+            >
+              <div className="grid gap-3 md:grid-cols-3">
+                <Field label="问卷名称">
+                  <input
+                    className={inputClass}
+                    value={modelQuestionForm.title}
+                    onChange={(event) =>
+                      setModelQuestionForm({
+                        ...modelQuestionForm,
+                        title: event.target.value,
+                      })
+                    }
+                  />
+                </Field>
+                <Field label="问卷用途">
+                  <select
+                    className={inputClass}
+                    value={modelQuestionForm.purpose}
+                    onChange={(event) =>
+                      setModelQuestionForm({
+                        ...modelQuestionForm,
+                        purpose: event.target.value,
+                      })
+                    }
+                  >
+                    {['组织诊断', '360 评审', '胜任力评估', '开放反馈', '综合问卷'].map((option) => (
+                      <option key={option}>{option}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="主要针对对象">
+                  <select
+                    className={inputClass}
+                    value={modelQuestionForm.target_scope}
+                    onChange={(event) =>
+                      setModelQuestionForm({
+                        ...modelQuestionForm,
+                        target_scope: event.target.value,
+                      })
+                    }
+                  >
+                    {['全体员工', '管理者', '中层管理者', '高层管理者', '一线员工', '指定部门', '指定岗位', '指定人员'].map((option) => (
+                      <option key={option}>{option}</option>
+                    ))}
+                  </select>
+                </Field>
+                {([
+                  ['总题数', 'total_question_count'],
+                  ['每个诊断假设对应题数', 'questions_per_hypothesis'],
+                  ['每个组织能力维度对应题数', 'questions_per_dimension'],
+                  ['开放题数量', 'open_question_count'],
+                  ['评分题数量', 'rating_question_count'],
+                  ['选择题数量', 'choice_question_count'],
+                  ['360 评价题数量', 'review360_question_count'],
+                ] as const).map(([label, key]) => (
+                  <Field key={key} label={label}>
+                    <input
+                      className={inputClass}
+                      type="number"
+                      min="0"
+                      value={Number(modelQuestionForm[key])}
+                      onChange={(event) =>
+                        setModelQuestionForm({
+                          ...modelQuestionForm,
+                          [key]: Number(event.target.value),
+                        })
+                      }
+                    />
+                  </Field>
+                ))}
+              </div>
+              <div className="mt-4 grid gap-2 md:grid-cols-3">
+                {([
+                  ['按诊断假设平均分配题目', 'average_by_hypothesis'],
+                  ['按维度权重分配题目', 'weighted_by_dimension'],
+                  ['允许 AI 自动补足题目', 'ai_auto_fill'],
+                ] as const).map(([label, key]) => (
+                  <label key={key} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm font-semibold">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(modelQuestionForm[key])}
+                      onChange={(event) =>
+                        setModelQuestionForm({
+                          ...modelQuestionForm,
+                          [key]: event.target.checked,
+                        })
+                      }
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </Panel>
+            {renderSurveyList()}
+            {renderSurveyDetail()}
+          </div>
+        );
+      }
+      if (review360Stage === 'distribution') {
+        return (
+          <div className="grid gap-5">
+            <Panel title="问卷发放管理" eyebrow="对象、关系和状态">
+              <p className="text-sm leading-6 text-slate-600">
+                本区用于管理发放对象、评价关系、发放状态、截止时间和提醒状态。当前阶段沿用员工管理、评价关系和回收进度数据，后续可扩展为独立发放批次。
+              </p>
+              <div className="mt-4 grid gap-3 md:grid-cols-3">
+                <Field label="选择问卷">
+                  <select
+                    className={inputClass}
+                    value={assignmentForm.survey_id}
+                    onChange={(event) =>
+                      setAssignmentForm({
+                        ...assignmentForm,
+                        survey_id: event.target.value,
+                      })
+                    }
+                  >
+                    <option value="">请选择问卷</option>
+                    {surveys.map((survey) => (
+                      <option key={survey.id} value={survey.id}>
+                        {survey.title}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="发放对象">
+                  <select
+                    className={inputClass}
+                    value={assignmentForm.target_scope}
+                    onChange={(event) =>
+                      setAssignmentForm({
+                        ...assignmentForm,
+                        target_scope: event.target.value,
+                      })
+                    }
+                  >
+                    {[
+                      '全体员工',
+                      '指定部门',
+                      '指定岗位',
+                      '指定层级',
+                      '指定人员',
+                      '根据组织架构选择团队',
+                    ].map((option) => (
+                      <option key={option}>{option}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="截止时间">
+                  <input
+                    className={inputClass}
+                    type="date"
+                    value={assignmentForm.due_date}
+                    onChange={(event) =>
+                      setAssignmentForm({
+                        ...assignmentForm,
+                        due_date: event.target.value,
+                      })
+                    }
+                  />
+                </Field>
+                <Field label="指定部门">
+                  <input
+                    className={inputClass}
+                    value={assignmentForm.department}
+                    onChange={(event) =>
+                      setAssignmentForm({
+                        ...assignmentForm,
+                        department: event.target.value,
+                      })
+                    }
+                  />
+                </Field>
+                <Field label="指定岗位">
+                  <input
+                    className={inputClass}
+                    value={assignmentForm.role}
+                    onChange={(event) =>
+                      setAssignmentForm({
+                        ...assignmentForm,
+                        role: event.target.value,
+                      })
+                    }
+                  />
+                </Field>
+                <Field label="指定层级">
+                  <input
+                    className={inputClass}
+                    value={assignmentForm.level}
+                    onChange={(event) =>
+                      setAssignmentForm({
+                        ...assignmentForm,
+                        level: event.target.value,
+                      })
+                    }
+                  />
+                </Field>
+              </div>
+              <Field className="mt-3 block" label="指定人员">
+                <div className="grid max-h-44 gap-2 overflow-auto rounded-lg border border-slate-200 bg-white p-3 md:grid-cols-3">
+                  {employees.map((employee) => (
+                    <label key={employee.id} className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={assignmentForm.employee_ids.includes(employee.id)}
+                        onChange={(event) =>
+                          setAssignmentForm({
+                            ...assignmentForm,
+                            employee_ids: event.target.checked
+                              ? [...assignmentForm.employee_ids, employee.id]
+                              : assignmentForm.employee_ids.filter((id) => id !== employee.id),
+                          })
+                        }
+                      />
+                      {employee.name} · {employee.department || '未设置部门'}
+                    </label>
+                  ))}
+                </div>
+              </Field>
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <Field label="提醒文案">
+                  <textarea
+                    className={textareaClass}
+                    value={assignmentForm.reminder_text}
+                    onChange={(event) =>
+                      setAssignmentForm({
+                        ...assignmentForm,
+                        reminder_text: event.target.value,
+                      })
+                    }
+                  />
+                </Field>
+                <div className="grid content-start gap-2">
+                  <label className="flex items-center gap-2 text-sm font-semibold">
+                    <input
+                      type="checkbox"
+                      checked={assignmentForm.anonymous}
+                      onChange={(event) =>
+                        setAssignmentForm({
+                          ...assignmentForm,
+                          anonymous: event.target.checked,
+                        })
+                      }
+                    />
+                    匿名填写
+                  </label>
+                  <label className="flex items-center gap-2 text-sm font-semibold">
+                    <input
+                      type="checkbox"
+                      checked={assignmentForm.allow_resubmit}
+                      onChange={(event) =>
+                        setAssignmentForm({
+                          ...assignmentForm,
+                          allow_resubmit: event.target.checked,
+                        })
+                      }
+                    />
+                    允许重复提交
+                  </label>
+                  <Button onClick={handleCreateSurveyAssignments} disabled={busy}>
+                    发放问卷
+                  </Button>
+                </div>
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-4">
+                {miniMetric('发放对象', employees.length)}
+                {miniMetric('评价关系', relationships.length)}
+                {miniMetric(
+                  '已填写',
+                  surveys.reduce(
+                    (sum, survey) => sum + (survey.submitted_count ?? 0),
+                    0,
+                  ),
+                )}
+                {miniMetric(
+                  '未填写',
+                  surveys.reduce(
+                    (sum, survey) => sum + (survey.pending_count ?? 0),
+                    0,
+                  ),
+                )}
+              </div>
+            </Panel>
+            <Panel title="组织架构导入 / 解析" eyebrow="结构化人员与评价关系">
+              <p className="text-sm leading-6 text-slate-600">
+                当前版本支持 CSV、Excel 复制文本、纯文本、Markdown 表格和 JSON 风格文本。图片组织架构解析需要 OCR / 视觉模型支持，当前版本建议上传或粘贴 Excel、CSV 或文本格式的组织架构。
+              </p>
+              <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                <Field label="组织架构文本">
+                  <div className="grid gap-2">
+                    <input
+                      className={inputClass}
+                      type="file"
+                      accept=".csv,.txt,.md,.json"
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = () => {
+                          setOrgChartText(String(reader.result ?? ''));
+                        };
+                        reader.readAsText(file, 'utf-8');
+                      }}
+                    />
+                    <textarea
+                      className={textareaClass}
+                      value={orgChartText}
+                      onChange={(event) => setOrgChartText(event.target.value)}
+                    />
+                  </div>
+                </Field>
+                <div className="grid gap-2">
+                  <Button variant="secondary" onClick={handleParseOrgChart}>
+                    解析组织架构
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    onClick={handleSaveParsedOrgEmployees}
+                    disabled={!parsedOrgEmployees.length}
+                  >
+                    保存到当前项目人员名单
+                  </Button>
+                  <Button onClick={handleGenerateRelationshipsFromOrgChart}>
+                    自动生成评价关系
+                  </Button>
+                </div>
+              </div>
+              {parsedOrgEmployees.length ? (
+                <div className="mt-4 overflow-x-auto">
+                  <table className="min-w-full text-left text-sm">
+                    <thead className="text-xs text-slate-500">
+                      <tr>
+                        <th className="px-3 py-2">姓名</th>
+                        <th className="px-3 py-2">部门</th>
+                        <th className="px-3 py-2">岗位</th>
+                        <th className="px-3 py-2">层级</th>
+                        <th className="px-3 py-2">直属上级</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {parsedOrgEmployees.map((employee, index) => (
+                        <tr key={`${employee.name}-${index}`} className="border-t border-slate-100">
+                          {(['name', 'department', 'role', 'level', 'manager'] as const).map((key) => (
+                            <td key={key} className="px-3 py-2">
+                              <input
+                                className={inputClass}
+                                value={String(employee[key] ?? '')}
+                                onChange={(event) =>
+                                  setParsedOrgEmployees((items) =>
+                                    items.map((item, itemIndex) =>
+                                      itemIndex === index
+                                        ? { ...item, [key]: event.target.value }
+                                        : item,
+                                    ),
+                                  )
+                                }
+                              />
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+            </Panel>
+            <Panel title="发放状态">
+              {surveyAssignments.length ? (
+                <div className="grid gap-2">
+                  {surveyAssignments.map((assignment) => (
+                    <div key={assignment.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
+                      <p className="font-bold text-slate-950">
+                        {assignment.survey_title} · {assignment.respondent_name || '未绑定人员'}
+                      </p>
+                      <p className="mt-1 text-slate-600">
+                        {displayStatus(assignment.status)} · 截止 {assignment.due_date || '未设置'} · {assignment.anonymous ? '匿名' : '实名'}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <EmptyState
+                  title="暂无发放任务"
+                  body="选择问卷和发放对象后，可以为指定人员生成定制问卷任务。"
+                />
+              )}
+            </Panel>
+            {renderEmployeesPage()}
+            {renderRelationshipsPage()}
+          </div>
+        );
+      }
+      if (review360Stage === 'dataCollection') {
+        return (
+          <div className="grid gap-5">
+            <Panel title="数据收集" eyebrow="回收与题目统计">
+              <p className="text-sm leading-6 text-slate-600">
+                数据收集会展示已填写人数、未填写人数、完成率、题目统计、维度统计和开放题文本。数据不足时仅显示当前项目已有回收进度，不伪装成完整统计。
+              </p>
+              <div className="mt-4 grid gap-3 md:grid-cols-4">
+                {surveys.map((survey) =>
+                  miniMetric(
+                    survey.title,
+                    `${survey.completion_rate ?? 0}%`,
+                    `已填写 ${survey.submitted_count ?? 0}，未填写 ${
+                      survey.pending_count ?? 0
+                    }`,
+                  ),
+                )}
+              </div>
+            </Panel>
+            {renderSurveyList()}
+            {renderSurveyDetail()}
+          </div>
+        );
+      }
+      return (
+        <div className="grid gap-5">
+          <Panel
+            title="员工反馈"
+            eyebrow="开放文本与主题聚类"
+            actions={
+              <Button onClick={handleClusterFeedback} disabled={busy}>
+                <Sparkles size={16} />
+                聚类员工反馈
+              </Button>
+            }
+          >
+            <p className="text-sm leading-6 text-slate-600">
+              员工反馈会沉淀问卷开放题、360 开放反馈、员工反馈、管理者观察记录和风险主题。当前阶段先展示员工反馈和主题聚类，为数据洞察和 AI 专家诊断会提供文本证据。
+            </p>
+            <div className="mt-4 grid gap-3 md:grid-cols-3">
+              {organizationFeedbackSummary?.theme_distribution.map((item) =>
+                miniMetric(
+                  feedbackTypeLabels[item.feedback_type] || item.feedback_type,
+                  item.count,
+                ),
+              ) || null}
+              {miniMetric('主题聚类', feedbackClusters.length)}
+            </div>
+          </Panel>
+          <Panel title="员工声音聚类">
+            {feedbackClusters.length ? (
+              <div className="grid gap-3 md:grid-cols-2">
+                {feedbackClusters.map((cluster) => (
+                  <div
+                    key={cluster.id}
+                    className="rounded-lg border border-slate-200 bg-slate-50 p-3"
+                  >
+                    <p className="font-bold text-slate-950">
+                      {cluster.theme} · {displayRiskLevel(cluster.risk_level)}
+                    </p>
+                    <p className="mt-1 text-sm leading-6 text-slate-600">
+                      {cluster.summary}
+                    </p>
+                    <p className="mt-2 text-sm font-semibold text-slate-700">
+                      下一步：{cluster.suggested_action}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <EmptyState
+                title="暂无员工反馈聚类"
+                body="收集员工开放反馈后，可以点击聚类员工反馈，识别高频主题和风险信号。"
+              />
+            )}
+          </Panel>
+        </div>
+      );
+    };
+
+    return renderOSPage(
+      '360 评审系统',
+      requireProject(
+        <div className="grid gap-5">
+          <Panel title="360 评审系统" eyebrow="证据收集系统">
+            <p className="text-sm leading-6 text-slate-600">
+              360 评审系统不是单纯问卷生成器，而是当前组织诊断项目里的证据收集系统。它先设计要问什么，再生成具体问卷，发放给对应对象，收集填写结果和员工反馈，最后进入数据洞察与 AI 专家诊断会。
+            </p>
+            <div className="mt-4 grid gap-3 md:grid-cols-5">
+              {stageOptions.map(stageButton)}
+            </div>
+          </Panel>
+          {renderStageContent()}
+        </div>,
+      ),
     );
   }
 
@@ -4925,12 +6468,10 @@ export default function App() {
               </p>
               <Button
                 className="mt-3"
-                variant={
-                  survey.task_status === 'submitted' ? 'secondary' : 'primary'
-                }
-                onClick={() => handleSubmitSurveyTask(survey)}
+                variant="secondary"
+                onClick={() => setSelectedSurveyTask(survey)}
               >
-                {survey.task_status === 'submitted' ? '重新提交' : '填写问卷'}
+                查看任务说明
               </Button>
             </div>
           ))}
@@ -4957,6 +6498,142 @@ export default function App() {
             </Button>
           </div>
         </div>
+      </Panel>,
+    );
+  }
+
+  function renderEmployeeRecordsPage() {
+    const finishedSurveys = surveyTasks.filter(
+      (survey) => survey.task_status === 'submitted',
+    );
+    const finishedReviews = employeeTasks.filter(
+      (task) => task.status === 'submitted',
+    );
+    return renderOSPage(
+      '填写记录',
+      <div className="grid gap-5 lg:grid-cols-2">
+        <Panel title="已完成任务" eyebrow="本人记录">
+          <div className="grid gap-3">
+            {[...finishedSurveys, ...finishedReviews].length ? (
+              <>
+                {finishedSurveys.map((survey) => (
+                  <div key={`survey-${survey.id}`} className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm">
+                    <p className="font-bold text-slate-950">{survey.title}</p>
+                    <p className="mt-1 text-slate-600">
+                      {surveyTypeLabels[survey.survey_type] || '组织诊断问卷'} · {displayStatus(survey.task_status)} · {survey.target_scope || '当前项目'}
+                    </p>
+                  </div>
+                ))}
+                {finishedReviews.map((task) => (
+                  <div key={`review-${task.id}`} className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm">
+                    <p className="font-bold text-slate-950">{task.reviewee_name}</p>
+                    <p className="mt-1 text-slate-600">
+                      {task.relation_label} · {displayStatus(task.status)} · {task.project_name}
+                    </p>
+                  </div>
+                ))}
+              </>
+            ) : (
+              <EmptyState
+                title="暂无完成记录"
+                body="完成问卷或 360 评审后，这里会显示你的填写记录。"
+              />
+            )}
+          </div>
+        </Panel>
+        <Panel title="开放反馈记录" eyebrow="本人提交">
+          <div className="grid gap-3">
+            {organizationFeedbackItems.length ? (
+              organizationFeedbackItems.map((item) => (
+                <div key={item.id} className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm">
+                  <p className="font-bold text-slate-950">
+                    {feedbackTypeLabels[item.feedback_type] || '开放反馈'} · {item.is_anonymous ? '匿名' : '实名'}
+                  </p>
+                  <p className="mt-2 leading-6 text-slate-700">{item.content}</p>
+                </div>
+              ))
+            ) : (
+              <EmptyState
+                title="暂无开放反馈"
+                body="你提交的开放反馈会在这里显示。"
+              />
+            )}
+          </div>
+        </Panel>
+      </div>,
+    );
+  }
+
+  function renderEmployeeHelpPage() {
+    return renderOSPage(
+      '帮助说明',
+      <Panel title="填写前请放心" eyebrow="员工说明">
+        <div className="grid gap-4 text-sm leading-6 text-slate-700">
+          <p>
+            本次反馈用于帮助组织发现协作、沟通、管理和工具使用中的真实问题。
+            这不是个人绩效考核，不直接作为晋升、淘汰或薪酬决策依据。
+          </p>
+          <p>
+            你的反馈会被汇总分析，用于组织诊断、数据洞察、AI 专家诊断会和后续改进行动。
+            管理员主要查看汇总结果、主题趋势和证据线索。
+          </p>
+          <div className="grid gap-3 md:grid-cols-2">
+            {[
+              ['这是个人考核吗？', '不是。系统关注组织整体问题和团队改进，不用于直接评价个人绩效。'],
+              ['谁能看到我的反馈？', '系统优先展示汇总结果。匿名反馈不会在管理端显示你的个人身份。'],
+              ['可以不评价不了解的人吗？', '可以。遇到不了解的行为表现时，请选择不清楚或补充说明。'],
+              ['提交后会如何使用？', '反馈会进入汇总分析，用于发现共性问题、形成报告和制定行动计划。'],
+            ].map(([title, body]) => (
+              <div key={title} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                <p className="font-bold text-slate-950">{title}</p>
+                <p className="mt-2 text-slate-600">{body}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+        {selectedSurveyTask ? (
+          <div className="mt-5 rounded-2xl border border-sky-100 bg-white p-5">
+            <p className="text-xs font-bold text-sky-700">任务说明</p>
+            <h3 className="mt-1 text-lg font-black text-slate-950">
+              {selectedSurveyTask.title}
+            </h3>
+            <div className="mt-3 grid gap-3 text-sm leading-6 text-slate-700 md:grid-cols-2">
+              <p>
+                本任务用于帮助组织发现协作、沟通、管理和工具使用中的真实问题，不是个人绩效考核。
+              </p>
+              <p>
+                预计耗时 5-10 分钟。提交后会进入汇总分析，用于组织诊断、数据洞察和改进行动。
+              </p>
+              <p>
+                匿名设置：{selectedSurveyTask.anonymous ? '匿名填写' : '实名填写'}。
+              </p>
+              <p>
+                截止时间：{selectedSurveyTask.due_date || '暂未设置'}。
+              </p>
+              <p>
+                提交后是否可修改：
+                {selectedSurveyTask.allow_resubmit ? '允许重新提交' : '以当前发放设置为准'}。
+              </p>
+              <p>
+                数据会被汇总使用，不直接作为晋升、淘汰或薪酬决策依据。
+              </p>
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Button
+                onClick={() => void handleSubmitSurveyTask(selectedSurveyTask)}
+                disabled={busy}
+              >
+                确认并提交本次反馈
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => setSelectedSurveyTask(null)}
+              >
+                稍后填写
+              </Button>
+            </div>
+          </div>
+        ) : null}
       </Panel>,
     );
   }
@@ -5013,6 +6690,9 @@ export default function App() {
       '员工反馈',
       <div className="grid gap-5 lg:grid-cols-[0.95fr_1.05fr]">
         <Panel title="提交组织反馈" eyebrow="员工声音">
+          <div className="mb-4 rounded-lg border border-sky-100 bg-sky-50 p-3 text-sm leading-6 text-sky-900">
+            这不是个人考核。系统关注组织整体问题，员工反馈会被汇总分析，不直接作为晋升、淘汰或薪酬依据。请尽量真实描述你观察到的协作、流程、管理和工具使用问题。
+          </div>
           <form
             className="grid gap-3"
             onSubmit={handleSubmitOrganizationFeedbackOS}
@@ -5039,7 +6719,7 @@ export default function App() {
                   'other',
                 ].map((type) => (
                   <option key={type} value={type}>
-                    {type}
+                    {feedbackTypeLabels[type] || type}
                   </option>
                 ))}
               </select>
@@ -5078,12 +6758,15 @@ export default function App() {
         </Panel>
         <Panel
           title={currentUser?.role === 'admin' ? '主题汇总' : '反馈记录'}
-          eyebrow="Desensitized"
+          eyebrow="汇总分析"
         >
           {organizationFeedbackSummary ? (
             <div className="mb-4 grid gap-3 md:grid-cols-3">
               {organizationFeedbackSummary.theme_distribution.map((item) =>
-                miniMetric(item.feedback_type, item.count),
+                miniMetric(
+                  feedbackTypeLabels[item.feedback_type] || item.feedback_type,
+                  item.count,
+                ),
               )}
             </div>
           ) : null}
@@ -5091,7 +6774,9 @@ export default function App() {
             {organizationFeedbackItems.map((item) => (
               <div key={item.id} className="rounded-lg bg-slate-50 p-3">
                 <p className="text-xs font-bold text-sky-700">
-                  {item.feedback_type} · {item.username ?? '匿名/本人'}
+                  {feedbackTypeLabels[item.feedback_type] ||
+                    item.feedback_type}{' '}
+                  · {item.username ?? '匿名/本人'}
                 </p>
                 <p className="mt-1 text-sm leading-6 text-slate-700">
                   {item.content}
@@ -5196,8 +6881,8 @@ export default function App() {
               <Button variant="secondary" onClick={() => goModule('diagnosis')}>
                 诊断假设
               </Button>
-              <Button variant="secondary" onClick={() => goModule('talent')}>
-                胜任力模型
+              <Button variant="secondary" onClick={() => goModule('talentOverview')}>
+                胜任力与画像
               </Button>
               <Button variant="secondary" onClick={() => goModule('rules')}>
                 诊断规则
@@ -5237,8 +6922,11 @@ export default function App() {
               >
                 项目中心
               </Button>
-              <Button variant="secondary" onClick={() => goModule('feedback')}>
-                员工反馈池
+              <Button
+                variant="secondary"
+                onClick={() => openReview360Stage('employeeFeedback')}
+              >
+                员工反馈
               </Button>
             </div>
           </Panel>
@@ -5693,7 +7381,7 @@ export default function App() {
     const feedbackList = isAdmin ? adminFeedback : myFeedback;
     return (
       <div className="min-h-screen bg-slate-100 text-slate-900">
-        {renderGlobalHeader(isAdmin ? '员工反馈池' : '员工反馈')}
+        {renderGlobalHeader('员工反馈')}
         <main className="mx-auto grid max-w-7xl gap-5 px-5 py-6 lg:px-8">
           <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900">
             匿名反馈不会在普通员工端展示身份信息。管理员可用于组织诊断，但不得公开单个评价人的原始内容。
@@ -6009,6 +7697,11 @@ export default function App() {
       <div className="min-h-screen bg-slate-100 text-slate-900">
         {renderGlobalHeader('诊断假设输入台')}
         <main className="mx-auto grid max-w-7xl gap-5 px-5 py-6 lg:px-8">
+          {renderInternalStepNav([
+            { module: 'diagnosisDesign', label: '诊断目标' },
+            { module: 'preDiagnosis', label: 'AI 预诊断' },
+            { module: 'diagnosis', label: '诊断假设' },
+          ])}
           <Panel
             title="诊断假设输入台"
             eyebrow="诊断假设控制台"
@@ -6285,10 +7978,16 @@ export default function App() {
                       project_id: diagnosisDraft.project_id ?? projectId,
                       hypothesis_id: diagnosisDraft.id ?? null,
                     });
-                    goModule('talent');
+                    setTalentGenerationForm({
+                      ...talentGenerationForm,
+                      hypothesis_ids: diagnosisDraft.id
+                        ? [diagnosisDraft.id]
+                        : [],
+                    });
+                    goModule('talentOverview');
                   }}
                 >
-                  进入胜任力模型生成
+                  进入胜任力与画像
                 </Button>
               </>
             }
@@ -6415,11 +8114,15 @@ export default function App() {
     );
     return (
       <div className="min-h-screen bg-slate-100 text-slate-900">
-        {renderGlobalHeader('AI 时代胜任力模型')}
+        {renderGlobalHeader('胜任力与画像')}
         <main className="mx-auto grid max-w-7xl gap-5 px-5 py-6 lg:px-8">
-          <Panel title="AI 时代胜任力模型" eyebrow="胜任力模型构建器">
+          {renderInternalStepNav([
+            { module: 'organizationDiagnosis', label: '组织能力维度' },
+            { module: 'talentOverview', label: '胜任力与画像', aliases: ['talent'] },
+          ])}
+          <Panel title="胜任力与画像" eyebrow="胜任力模型构建器">
             <p className="text-sm leading-6 text-slate-600">
-              系统将基于当前项目已确认的诊断假设和组织能力维度，生成适合本次项目的胜任力模型。你可以编辑维度、行为标准、题目和权重，并将其用于后续问卷生成。
+              胜任力模型用于把当前项目已确认的诊断假设转化为岗位 / 层级所需能力与行为标准，并与组织能力维度、人才画像和后续问卷设计衔接。
             </p>
             <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-900">
               胜任力模型仅用于发展反馈、能力诊断和组织改进，不应作为自动化人事决策依据。
@@ -6507,27 +8210,68 @@ export default function App() {
             <Panel title="生成设置">
               <div className="grid gap-3">
                 <Field label="已确认诊断假设">
-                  <select
-                    className={inputClass}
-                    value={talentDraft.hypothesis_id ?? ''}
-                    onChange={(event) =>
-                      setTalentDraft({
-                        ...talentDraft,
-                        hypothesis_id: event.target.value
-                          ? Number(event.target.value)
-                          : null,
-                      })
-                    }
-                  >
-                    <option value="">请选择</option>
-                    {confirmedHypotheses.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        #{item.id} ·{' '}
-                        {item.ai_extracted_hypotheses[0]?.hypothesis_title ||
-                          item.target_scope}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="grid gap-2 rounded-lg border border-slate-200 bg-white p-3">
+                    <button
+                      type="button"
+                      className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-left text-sm font-semibold"
+                      onClick={() => {
+                        const ids = confirmedHypotheses
+                          .map((item) => item.id)
+                          .filter((id): id is number => Boolean(id));
+                        setTalentGenerationForm({
+                          ...talentGenerationForm,
+                          hypothesis_ids: ids,
+                        });
+                        setTalentDraft({
+                          ...talentDraft,
+                          hypothesis_id: ids[0] ?? null,
+                        });
+                      }}
+                    >
+                      选择全部已确认假设
+                    </button>
+                    {confirmedHypotheses.map((item) => {
+                      const id = item.id;
+                      if (!id) return null;
+                      const checked =
+                        talentGenerationForm.hypothesis_ids.includes(id);
+                      return (
+                        <label
+                          key={id}
+                          className="flex items-start gap-2 rounded-lg bg-slate-50 p-2 text-sm leading-6"
+                        >
+                          <input
+                            className="mt-1"
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(event) => {
+                              const next = event.target.checked
+                                ? [...talentGenerationForm.hypothesis_ids, id]
+                                : talentGenerationForm.hypothesis_ids.filter(
+                                    (value) => value !== id,
+                                  );
+                              setTalentGenerationForm({
+                                ...talentGenerationForm,
+                                hypothesis_ids: next,
+                              });
+                              setTalentDraft({
+                                ...talentDraft,
+                                hypothesis_id: next[0] ?? null,
+                              });
+                            }}
+                          />
+                          <span>
+                            <span className="block font-bold text-slate-950">
+                              {hypothesisTitle(item)}
+                            </span>
+                            <span className="block text-slate-600">
+                              {hypothesisDescription(item) || '暂无假设说明'}
+                            </span>
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
                 </Field>
                 <Field label="模型模板">
                   <select
@@ -6575,7 +8319,7 @@ export default function App() {
                 </Field>
                 <Button
                   onClick={handleGenerateTalentModel}
-                  disabled={busy || !talentDraft.hypothesis_id}
+                  disabled={busy || !talentGenerationForm.hypothesis_ids.length}
                 >
                   <Sparkles size={16} />
                   AI 生成胜任力模型
@@ -6611,10 +8355,10 @@ export default function App() {
                         )?.constraints || modelQuestionForm.constraints,
                     });
                     setActiveTab('questionnaire');
-                    goModule('review360');
+                    openReview360Stage('questionnaireGenerate');
                   }}
                 >
-                  基于该模型生成问卷
+                  进入 360 评审系统生成问卷
                 </Button>
               </div>
             </Panel>
@@ -6992,8 +8736,7 @@ export default function App() {
                     {confirmedHypotheses.map((item) => (
                       <option key={item.id} value={item.id}>
                         #{item.id} ·{' '}
-                        {item.ai_extracted_hypotheses[0]?.hypothesis_title ||
-                          item.target_scope}
+                        {hypothesisTitle(item)}
                       </option>
                     ))}
                   </select>
@@ -7250,7 +8993,7 @@ export default function App() {
         {renderGlobalHeader('组织诊断看板')}
         <main className="mx-auto grid max-w-7xl gap-5 px-5 py-6 lg:px-8">
           <Panel
-            title="组织诊断看板"
+            title="数据洞察"
             actions={
               <>
                 <Button
@@ -7270,9 +9013,7 @@ export default function App() {
             }
           >
             <p className="text-sm leading-6 text-slate-600">
-              看板结合 360 评分、AI
-              胜任力模型、诊断规则、员工声音聚类和组织风险，帮助管理员
-              判断可能的组织问题，而不是只看问卷平均分。
+              数据洞察会汇总问卷、360 评审、员工反馈和开放题文本，识别高频主题、风险信号、维度短板和证据强弱，为 AI 专家诊断会提供证据基础。数据不足时仅显示已有项目数据，不伪装成完整统计。
             </p>
             <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-900">
               高潜人才信号仅作为人才发展线索，不作为晋升或淘汰依据。组织风险需结合业务事实和访谈确认。
@@ -7560,8 +9301,7 @@ export default function App() {
                     {confirmedHypotheses.map((item) => (
                       <option key={item.id} value={item.id}>
                         #{item.id} ·{' '}
-                        {item.ai_extracted_hypotheses[0]?.hypothesis_title ||
-                          item.target_scope}
+                        {hypothesisTitle(item)}
                       </option>
                     ))}
                   </select>
@@ -7773,10 +9513,20 @@ export default function App() {
       ['创建诊断项目', '明确诊断场景、参与对象和项目周期。', 'projectWorkspace'],
       ['设置诊断目标', '明确本次诊断要回答的组织问题。', 'projectWorkspace'],
       ['AI 预诊断会', '提出初步假设、风险点和建议观察维度。', 'diagnosis'],
+      ['编辑并确认诊断假设', '把预诊断草案整理成可验证假设。', 'diagnosis'],
       ['配置组织能力维度', '确定从哪些组织能力角度观察问题。', 'organizationDiagnosis'],
-      ['生成胜任力模型', '把已确认假设转成能力标准和行为指标。', 'talent'],
-      ['生成综合问卷', '把假设、维度和模型转成证据收集问题。', 'review360'],
-      ['AI 专家诊断会', '基于真实证据形成共识、报告和行动计划。', 'expertCouncil'],
+      ['生成胜任力与画像', '把已确认假设转成能力标准和行为指标。', 'talentOverview'],
+      ['进入 360 评审系统', '统一设计、生成、发放和收集证据。', 'review360'],
+      ['问卷设计', '定义本次诊断需要收集哪些证据。', 'review360'],
+      ['问卷生成', '把假设、维度和模型转成证据收集问题。', 'review360'],
+      ['问卷发放管理', '管理对象、关系、状态和提醒。', 'review360'],
+      ['数据收集', '查看完成率、题目统计和开放文本。', 'review360'],
+      ['员工反馈', '汇总真实声音和风险主题。', 'review360'],
+      ['数据洞察', '识别高频主题、维度短板和证据强弱。', 'orgDashboard'],
+      ['AI 专家诊断会', '基于真实证据形成共识和分歧。', 'expertCouncil'],
+      ['生成报告', '输出诊断结论和证据链。', 'diagnosisReports'],
+      ['制定行动计划', '形成 30/60/90 天改进任务。', 'diagnosisReports'],
+      ['后续复盘', '追踪行动完成和组织改进效果。', 'diagnosisReports'],
     ] as const;
     const employeeCards = [
       ['为什么需要填写', '帮助团队发现协作、沟通、管理和工具使用中的真实问题。'],
@@ -7799,8 +9549,9 @@ export default function App() {
             </h1>
             <p className="mt-4 max-w-3xl text-base leading-7 text-slate-600">
               系统围绕同一条主流程运行：创建项目 → 设置诊断目标 → AI 预诊断会 →
-              编辑诊断假设 → 配置组织能力维度 → 生成胜任力模型 → 生成综合问卷 →
-              员工填写 → 数据洞察 → AI 专家诊断会 → 生成报告 → 制定行动计划 → 后续复盘。
+              编辑并确认诊断假设 → 配置组织能力维度 → 生成胜任力与画像 → 进入 360 评审系统 →
+              问卷设计 → 问卷生成 → 问卷发放管理 → 数据收集 → 员工反馈 → 数据洞察 →
+              AI 专家诊断会 → 生成报告 → 制定行动计划 → 后续复盘。
             </p>
           </section>
 
@@ -7874,10 +9625,10 @@ export default function App() {
         action: () => goModule('diagnosis'),
       },
       {
-        title: '胜任力模型',
+        title: '胜任力与画像',
         body: '基于当前项目已确认诊断假设生成胜任力模型，支持编辑维度、行为标准、样例题目和权重。',
         icon: <Sparkles className="text-emerald-700" size={24} />,
-        action: () => goModule('talent'),
+        action: () => goModule('talentOverview'),
       },
       {
         title: '360评审 Agent',
@@ -7901,7 +9652,7 @@ export default function App() {
         title: '员工声音智能体',
         body: '收集员工日常意见、AI 使用问题和组织卡点，并用 AI 聚类识别重复主题。',
         icon: <FileText className="text-violet-700" size={24} />,
-        action: () => goModule('feedback'),
+        action: () => openReview360Stage('employeeFeedback'),
       },
       {
         title: '诊断报告',
@@ -7931,7 +9682,7 @@ export default function App() {
                 title: '员工反馈',
                 body: '提交组织问题、管理建议、流程问题、AI 使用问题和文化氛围反馈。',
                 icon: <FileText className="text-violet-700" size={24} />,
-                action: () => goModule('feedback'),
+                action: () => openReview360Stage('employeeFeedback'),
               },
             ]
           : [];
@@ -8529,8 +10280,7 @@ export default function App() {
                 {confirmedHypotheses.map((item) => (
                   <option key={item.id} value={item.id}>
                     #{item.id} ·{' '}
-                    {item.ai_extracted_hypotheses[0]?.hypothesis_title ||
-                      item.target_scope}
+                    {hypothesisTitle(item)}
                   </option>
                 ))}
               </select>
@@ -8640,36 +10390,6 @@ export default function App() {
               </Field>
             </div>
           </div>
-
-          {false && modelGeneratedQuestions.length ? (
-            <div className="mt-5 grid gap-3">
-              <p className="text-sm font-bold text-slate-900">
-                最近一次基于模型生成的问题
-              </p>
-              {modelGeneratedQuestions.slice(0, 12).map((question, index) => (
-                <div
-                  key={`${question.dimension_name}-${index}`}
-                  className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm"
-                >
-                  <p className="font-bold text-slate-950">
-                    维度：{question.dimension_name} / 题型：{' '}
-                    {question.question_type}
-                  </p>
-                  <p className="mt-1 text-slate-700">
-                    题目：{question.content}
-                  </p>
-                  <p className="mt-1 text-slate-500">
-                    评价关系：{question.relation_scope}
-                  </p>
-                  {question.open_followup ? (
-                    <p className="mt-1 text-slate-500">
-                      开放追问：{question.open_followup}
-                    </p>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          ) : null}
         </Panel>
 
         <Panel
@@ -9792,8 +11512,11 @@ export default function App() {
   if (activeModule === 'executiveDashboard') {
     return renderExecutiveDashboardPage();
   }
-  if (activeModule === 'projectWorkspace') {
+  if (activeModule === 'projectWorkspace' || activeModule === 'projectList') {
     return renderProjectWorkspacePage();
+  }
+  if (activeModule === 'diagnosisDesign' || activeModule === 'preDiagnosis') {
+    return renderDiagnosisPage();
   }
   if (activeModule === 'organizationDiagnosis') {
     return renderOrganizationDiagnosisOSPage();
@@ -9806,6 +11529,9 @@ export default function App() {
   }
   if (activeModule === 'responseTracking') {
     return renderResponseTrackingPage();
+  }
+  if (activeModule === 'review360') {
+    return renderReview360SystemPage();
   }
   if (activeModule === 'dashboard') {
     if (currentUser?.role === 'admin') return renderExecutiveDashboardPage();
@@ -9828,12 +11554,14 @@ export default function App() {
     return renderOrganizationFeedbackOSPage();
   }
   if (activeModule === 'myGrowthReport') {
+    if (currentUser?.role === 'employee') return renderEmployeeRecordsPage();
     return renderReportsOSPage();
   }
   if (activeModule === 'admin') {
     return renderAdminDashboardPage();
   }
   if (activeModule === 'employee') {
+    if (currentUser?.role === 'employee') return renderEmployeeHelpPage();
     return renderEmployeeDashboardPage();
   }
   if (activeModule === 'feedback') {
@@ -9843,7 +11571,7 @@ export default function App() {
     return renderDiagnosisPage();
   }
   if (activeModule === 'talent') {
-    return renderTalentModelPage();
+    return renderTalentOverviewPage();
   }
   if (activeModule === 'rules') {
     return renderDiagnosisRulesPage();
@@ -9900,10 +11628,10 @@ export default function App() {
             </button>
             <button
               className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-slate-600 hover:bg-slate-100 hover:text-slate-950"
-              onClick={() => goModule('talent')}
+              onClick={() => goModule('talentOverview')}
             >
               <Sparkles size={18} />
-              胜任力模型
+              胜任力与画像
             </button>
             <button
               className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-slate-600 hover:bg-slate-100 hover:text-slate-950"
@@ -9942,7 +11670,7 @@ export default function App() {
             </button>
             <button
               className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-slate-600 hover:bg-slate-100 hover:text-slate-950"
-              onClick={() => goModule('feedback')}
+              onClick={() => openReview360Stage('employeeFeedback')}
             >
               <FileText size={18} />
               员工反馈

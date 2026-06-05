@@ -60,10 +60,17 @@ export type Employee = {
   id: number;
   project_id: number;
   name: string;
+  username?: string;
+  email?: string;
+  phone?: string;
   department: string;
   role: string;
+  position?: string;
   level: string;
   manager: string;
+  manager_name?: string;
+  manager_id?: number | null;
+  is_active?: number | boolean;
 };
 
 export type Relationship = {
@@ -238,10 +245,18 @@ export type Survey = {
     | 'organization_feedback';
   title: string;
   description: string;
-  status: 'draft' | 'active' | 'closed';
+  purpose?: string;
+  target_scope?: string;
+  total_question_count?: number;
+  status: 'draft' | 'active' | 'closed' | 'disabled' | 'deleted';
   created_by?: number | null;
   created_at: string;
   task_status?: 'pending' | 'submitted';
+  due_date?: string;
+  anonymous?: number | boolean;
+  allow_resubmit?: number | boolean;
+  target_employee_id?: number | null;
+  relationship_type?: string;
   submitted_count?: number;
   pending_count?: number;
   completion_rate?: number;
@@ -253,6 +268,8 @@ export type SurveyQuestion = {
   id: number;
   project_id: number;
   survey_id: number;
+  hypothesis_id?: number | null;
+  model_id?: number | null;
   source_type: 'org_diagnosis' | 'talent_model' | 'ai_model' | 'manual' | string;
   question_type: string;
   dimension_key: string;
@@ -260,6 +277,10 @@ export type SurveyQuestion = {
   question_text: string;
   options: string[];
   required: boolean;
+  target_role?: string;
+  weight?: number;
+  source?: string;
+  status?: 'draft' | 'active' | 'disabled' | string;
   sort_order: number;
 };
 
@@ -444,6 +465,11 @@ export type ExtractedHypothesis = {
 export type DiagnosisHypothesis = {
   id?: number;
   project_id: number | null;
+  title?: string;
+  description?: string;
+  problem_type?: string;
+  evidence_needed?: string;
+  related_dimensions?: string[];
   created_by?: number | null;
   target_scope: string;
   diagnosis_purpose: string[];
@@ -514,6 +540,26 @@ export type ModelGeneratedQuestion = {
   weight: number;
   required?: boolean;
   order?: number;
+};
+
+export type SurveyAssignment = {
+  id: number;
+  project_id: number;
+  survey_id: number;
+  survey_title?: string;
+  respondent_user_id?: number | null;
+  respondent_employee_id?: number | null;
+  respondent_name?: string | null;
+  target_employee_id?: number | null;
+  target_name?: string | null;
+  relationship_type: string;
+  status: string;
+  due_date: string;
+  anonymous: number | boolean;
+  allow_resubmit: number | boolean;
+  reminder_text: string;
+  submitted_at?: string | null;
+  created_at: string;
 };
 
 export type DiagnosisRule = {

@@ -22,31 +22,46 @@ def get_settings() -> dict[str, str]:
         row = conn.execute("SELECT * FROM ai_settings WHERE id = 1").fetchone()
 
     provider = os.getenv("AI_PROVIDER", os.getenv("AI_MODE", "local")).strip().lower()
+    env_api_key_configured = False
+    env_base_url_configured = False
+    env_model_configured = False
     if provider == "deepseek":
         api_key = os.getenv("DEEPSEEK_API_KEY") or os.getenv("AI_API_KEY") or ""
         base_url = os.getenv("DEEPSEEK_BASE_URL") or os.getenv("AI_BASE_URL") or DEFAULT_DEEPSEEK_BASE_URL
         model = os.getenv("DEEPSEEK_MODEL") or os.getenv("AI_MODEL") or DEFAULT_DEEPSEEK_MODEL
+        env_api_key_configured = bool(os.getenv("DEEPSEEK_API_KEY") or os.getenv("AI_API_KEY"))
+        env_base_url_configured = bool(os.getenv("DEEPSEEK_BASE_URL") or os.getenv("AI_BASE_URL"))
+        env_model_configured = bool(os.getenv("DEEPSEEK_MODEL") or os.getenv("AI_MODEL"))
     elif provider in {"openai-compatible", "openai", "compatible"}:
         provider = "openai-compatible"
         api_key = os.getenv("AI_API_KEY") or os.getenv("OPENAI_API_KEY", "")
         base_url = os.getenv("AI_BASE_URL") or os.getenv("OPENAI_BASE_URL", DEFAULT_BASE_URL)
         model = os.getenv("AI_MODEL") or os.getenv("OPENAI_MODEL", DEFAULT_MODEL)
+        env_api_key_configured = bool(os.getenv("AI_API_KEY") or os.getenv("OPENAI_API_KEY"))
+        env_base_url_configured = bool(os.getenv("AI_BASE_URL") or os.getenv("OPENAI_BASE_URL"))
+        env_model_configured = bool(os.getenv("AI_MODEL") or os.getenv("OPENAI_MODEL"))
     elif provider in {"local", "mock"}:
         provider = "local"
         api_key = os.getenv("AI_API_KEY") or ""
         base_url = os.getenv("AI_BASE_URL") or DEFAULT_BASE_URL
         model = os.getenv("AI_MODEL") or "local-mock"
+        env_api_key_configured = bool(os.getenv("AI_API_KEY"))
+        env_base_url_configured = bool(os.getenv("AI_BASE_URL"))
+        env_model_configured = bool(os.getenv("AI_MODEL"))
     else:
         api_key = os.getenv("AI_API_KEY") or os.getenv("OPENAI_API_KEY", "")
         base_url = os.getenv("AI_BASE_URL") or os.getenv("OPENAI_BASE_URL", DEFAULT_BASE_URL)
         model = os.getenv("AI_MODEL") or os.getenv("OPENAI_MODEL", DEFAULT_MODEL)
+        env_api_key_configured = bool(os.getenv("AI_API_KEY") or os.getenv("OPENAI_API_KEY"))
+        env_base_url_configured = bool(os.getenv("AI_BASE_URL") or os.getenv("OPENAI_BASE_URL"))
+        env_model_configured = bool(os.getenv("AI_MODEL") or os.getenv("OPENAI_MODEL"))
     temperature = os.getenv("AI_TEMPERATURE", "0.35")
     timeout_seconds = os.getenv("AI_TIMEOUT_SECONDS", "45")
 
     if row:
-        api_key = row["api_key"] or api_key
-        base_url = row["base_url"] or base_url
-        model = row["model"] or model
+        api_key = api_key if env_api_key_configured else row["api_key"] or api_key
+        base_url = base_url if env_base_url_configured else row["base_url"] or base_url
+        model = model if env_model_configured else row["model"] or model
 
     return {
         "provider": provider,
