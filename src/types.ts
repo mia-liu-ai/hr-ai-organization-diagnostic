@@ -251,6 +251,7 @@ export type Survey = {
   status: 'draft' | 'active' | 'closed' | 'disabled' | 'deleted';
   created_by?: number | null;
   created_at: string;
+  updated_at?: string;
   task_status?: 'pending' | 'submitted';
   due_date?: string;
   anonymous?: number | boolean;
@@ -449,6 +450,8 @@ export type ProjectProgress = {
 };
 
 export type ExtractedHypothesis = {
+  id?: number;
+  project_id?: number;
   hypothesis_title: string;
   hypothesis_detail: string;
   problem_type:
@@ -460,6 +463,9 @@ export type ExtractedHypothesis = {
   suggested_validation_method: string;
   suggested_data_sources: string[];
   related_talent_dimensions: string[];
+  status?: 'draft' | 'generated' | 'confirmed' | 'archived';
+  created_at?: string;
+  updated_at?: string;
 };
 
 export type DiagnosisHypothesis = {
@@ -480,7 +486,7 @@ export type DiagnosisHypothesis = {
   constraints: string;
   expected_outputs: string[];
   ai_extracted_hypotheses: ExtractedHypothesis[];
-  status: 'draft' | 'generated' | 'confirmed';
+  status: 'draft' | 'generated' | 'confirmed' | 'archived';
   created_at?: string;
   updated_at?: string;
   ai_run_id?: number;

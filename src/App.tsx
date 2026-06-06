@@ -442,7 +442,6 @@ function hypothesisTitle(item: DiagnosisHypothesis | undefined) {
   if (!item) return '未命名诊断假设';
   return (
     item.title ||
-    item.ai_extracted_hypotheses[0]?.hypothesis_title ||
     item.target_scope ||
     `诊断假设 ${item.id ?? ''}`.trim()
   );
@@ -452,7 +451,6 @@ function hypothesisDescription(item: DiagnosisHypothesis | undefined) {
   if (!item) return '';
   return (
     item.description ||
-    item.ai_extracted_hypotheses[0]?.hypothesis_detail ||
     item.hr_core_judgment ||
     ''
   );
@@ -750,6 +748,14 @@ export default function App() {
   const [myFeedback, setMyFeedback] = useState<FeedbackItem[]>([]);
   const [adminFeedback, setAdminFeedback] = useState<FeedbackItem[]>([]);
   const [diagnosisList, setDiagnosisList] = useState<DiagnosisHypothesis[]>([]);
+  const [confirmedHypotheses, setConfirmedHypotheses] = useState<
+    DiagnosisHypothesis[]
+  >([]);
+  const [selectedHypothesisIds, setSelectedHypothesisIds] = useState<number[]>(
+    [],
+  );
+  const confirmedHypothesisProjectRef = useRef<number | null>(null);
+  const confirmedHypothesisIdsRef = useRef<number[]>([]);
   const [diagnosisDraft, setDiagnosisDraft] =
     useState<DiagnosisHypothesis>(blankDiagnosis);
   const [selectedDiagnosisId, setSelectedDiagnosisId] = useState<number | null>(
@@ -867,8 +873,11 @@ export default function App() {
   const [selectedSurveyId, setSelectedSurveyId] = useState<number | null>(null);
   const [selectedSurveyDetail, setSelectedSurveyDetail] =
     useState<SurveyDetail | null>(null);
+  const surveyQuestions = selectedSurveyDetail?.questions ?? [];
   const [editingSurveyId, setEditingSurveyId] = useState<number | null>(null);
   const [surveyGenerationNotice, setSurveyGenerationNotice] = useState('');
+  const [lastSurveyGenerationPayload, setLastSurveyGenerationPayload] =
+    useState<Record<string, unknown> | null>(null);
   const surveyDetailRef = useRef<HTMLDivElement | null>(null);
   const [surveyQuestionFilters, setSurveyQuestionFilters] = useState({
     hypothesis_id: '',
@@ -1327,23 +1336,60 @@ export default function App() {
     }
   }
 
+  async function loadConfirmedHypotheses(projectId: number) {
+    const hypotheses = await api.get<DiagnosisHypothesis[]>(
+      `/projects/${projectId}/diagnosis-hypotheses?status=confirmed`,
+    );
+    const confirmedIds = hypotheses
+      .map((item) => item.id)
+      .filter((id): id is number => typeof id === 'number');
+    const projectChanged = confirmedHypothesisProjectRef.current !== projectId;
+    const newlyConfirmedIds = confirmedIds.filter(
+      (id) => !confirmedHypothesisIdsRef.current.includes(id),
+    );
+    const mergeSelection = (currentIds: number[]) =>
+      projectChanged
+        ? confirmedIds
+        : Array.from(
+            new Set([
+              ...currentIds.filter((id) => confirmedIds.includes(id)),
+              ...newlyConfirmedIds,
+            ]),
+          );
+    confirmedHypothesisProjectRef.current = projectId;
+    confirmedHypothesisIdsRef.current = confirmedIds;
+    setConfirmedHypotheses(hypotheses);
+    setSelectedHypothesisIds(mergeSelection);
+    setTalentGenerationForm((form) => {
+      return {
+        ...form,
+        hypothesis_ids: mergeSelection(form.hypothesis_ids),
+      };
+    });
+    setModelQuestionForm((form) => {
+      return {
+        ...form,
+        hypothesis_id: '',
+        hypothesis_ids: mergeSelection(form.hypothesis_ids),
+      };
+    });
+    return hypotheses;
+  }
+
   async function loadStrategyReferences() {
     if (currentUser && !isHrUser && !localStorage.getItem(sessionStorageKey))
       return;
     const id = selectedProjectId;
     if (!id) {
-      setDiagnosisList([]);
+      setConfirmedHypotheses([]);
       setTalentModels([]);
       return;
     }
     try {
       const [hypotheses, models] = await Promise.all([
-        api.get<DiagnosisHypothesis[]>(
-          `/projects/${id}/diagnosis-hypotheses?status=confirmed`,
-        ),
+        loadConfirmedHypotheses(id),
         api.get<TalentModel[]>(`/projects/${id}/talent-models`),
       ]);
-      setDiagnosisList(hypotheses);
       setTalentModels(models);
     } catch {
       // Strategy references are admin-only; keep the existing 360 flow usable if they are unavailable.
@@ -1362,9 +1408,10 @@ export default function App() {
     setError('');
     try {
       const items = await api.get<DiagnosisHypothesis[]>(
-        `/projects/${id}/diagnosis-hypotheses`,
+        `/projects/${id}/diagnostic-inputs`,
       );
       setDiagnosisList(items);
+      await loadConfirmedHypotheses(id);
       const selected =
         items.find((item) => item.id === selectedDiagnosisId) ?? items[0];
       if (selected) {
@@ -1383,7 +1430,7 @@ export default function App() {
   async function loadTalentWorkspace() {
     const id = selectedProjectId;
     if (!id) {
-      setDiagnosisList([]);
+      setConfirmedHypotheses([]);
       setTalentModels([]);
       setTalentDraft({ ...blankTalentModel, project_id: null });
       setSelectedTalentModelId(null);
@@ -1393,12 +1440,9 @@ export default function App() {
     setError('');
     try {
       const [hypotheses, models] = await Promise.all([
-        api.get<DiagnosisHypothesis[]>(
-          `/projects/${id}/diagnosis-hypotheses?status=confirmed`,
-        ),
+        loadConfirmedHypotheses(id),
         api.get<TalentModel[]>(`/projects/${id}/talent-models`),
       ]);
-      setDiagnosisList(hypotheses);
       setTalentModels(models);
       const confirmedIds = hypotheses
         .filter((item) => item.status === 'confirmed' && item.id)
@@ -1417,13 +1461,10 @@ export default function App() {
         setSelectedTalentModelId(selected.id ?? null);
         setTalentDraft(selected);
       } else {
-        const confirmed = hypotheses.find(
-          (item) => item.status === 'confirmed',
-        );
         setTalentDraft({
           ...blankTalentModel,
           project_id: id,
-          hypothesis_id: confirmed?.id ?? null,
+          hypothesis_id: null,
         });
       }
     } catch (err) {
@@ -1436,7 +1477,7 @@ export default function App() {
   async function loadRulesWorkspace() {
     const id = selectedProjectId;
     if (!id) {
-      setDiagnosisList([]);
+      setConfirmedHypotheses([]);
       setTalentModels([]);
       setDiagnosisRules([]);
       return;
@@ -1445,13 +1486,10 @@ export default function App() {
     setError('');
     try {
       const [hypotheses, models, rules] = await Promise.all([
-        api.get<DiagnosisHypothesis[]>(
-          `/projects/${id}/diagnosis-hypotheses?status=confirmed`,
-        ),
+        loadConfirmedHypotheses(id),
         api.get<TalentModel[]>(`/projects/${id}/talent-models`),
         api.get<DiagnosisRule[]>(`/diagnosis/rules?project_id=${id}`),
       ]);
-      setDiagnosisList(hypotheses);
       setTalentModels(models);
       setDiagnosisRules(rules);
       const confirmed = hypotheses.find((item) => item.status === 'confirmed');
@@ -1509,7 +1547,7 @@ export default function App() {
   async function loadDiagnosisReportsWorkspace() {
     const id = selectedProjectId;
     if (!id) {
-      setDiagnosisList([]);
+      setConfirmedHypotheses([]);
       setTalentModels([]);
       setDiagnosisReports([]);
       setActionPlans([]);
@@ -1520,14 +1558,11 @@ export default function App() {
     try {
       const query = `?project_id=${id}`;
       const [hypotheses, models, reportsData, plans] = await Promise.all([
-        api.get<DiagnosisHypothesis[]>(
-          `/projects/${id}/diagnosis-hypotheses?status=confirmed`,
-        ),
+        loadConfirmedHypotheses(id),
         api.get<TalentModel[]>(`/projects/${id}/talent-models`),
         api.get<DiagnosisReport[]>(`/diagnosis/reports${query}`),
         api.get<ActionPlan[]>(`/action-plans${query}`),
       ]);
-      setDiagnosisList(hypotheses);
       setTalentModels(models);
       setDiagnosisReports(reportsData);
       setActionPlans(plans);
@@ -1609,18 +1644,16 @@ export default function App() {
         }));
       }
       if (isHrUser) {
-        const [confirmedHypotheses, models, surveyData, orgQuestions] =
+        const [hypotheses, models, surveyData, orgQuestions] =
           await Promise.all([
-            api.get<DiagnosisHypothesis[]>(
-              `/projects/${nextProjectId}/diagnosis-hypotheses?status=confirmed`,
-            ),
+            loadConfirmedHypotheses(nextProjectId),
             api.get<TalentModel[]>(`/projects/${nextProjectId}/talent-models`),
-            api.get<Survey[]>(`/projects/${nextProjectId}/survey-progress`),
+            api.surveys.list<Survey[]>(nextProjectId),
             api.get<{ dimensions: OrganizationDiagnosisDimension[] }>(
               `/projects/${nextProjectId}/org-diagnosis/questions`,
             ),
           ]);
-        setDiagnosisList(confirmedHypotheses);
+        setConfirmedHypotheses(hypotheses);
         setTalentModels(models);
         setSurveys(surveyData);
         setOrgDiagnosisQuestions(orgQuestions.dimensions);
@@ -1737,7 +1770,7 @@ export default function App() {
         setSurveyTasks(tasks);
       } else {
         const [surveyData, assignments] = await Promise.all([
-          api.get<Survey[]>(`/projects/${id}/survey-progress`),
+          api.surveys.list<Survey[]>(id),
           api.get<SurveyAssignment[]>(`/projects/${id}/survey-assignments`),
         ]);
         setSurveys(surveyData);
@@ -2043,18 +2076,18 @@ export default function App() {
       setNotice('请先前往项目中心创建或选择一个诊断项目');
       return;
     }
-    const confirmedHypothesis = diagnosisList.find(
-      (item) => item.status === 'confirmed',
-    );
-    const extracted = confirmedHypothesis?.ai_extracted_hypotheses[0];
+    const hypothesisTitles = confirmedHypotheses
+      .map(hypothesisTitle)
+      .filter(Boolean);
+    const hypothesisEvidence = confirmedHypotheses
+      .map(hypothesisDescription)
+      .filter(Boolean);
     const now = Date.now();
     const title =
-      extracted?.hypothesis_title ||
-      confirmedHypothesis?.target_scope ||
+      hypothesisTitles.join('、') ||
       '当前项目关键组织问题';
     const focus =
-      extracted?.suggested_validation_method ||
-      confirmedHypothesis?.constraints ||
+      hypothesisEvidence.join('；') ||
       '围绕当前项目诊断目标，观察组织能力短板、协作阻力和管理行为证据。';
     const nextDimensions = [
       ...orgDiagnosisQuestions,
@@ -2190,10 +2223,12 @@ export default function App() {
 
   useEffect(() => {
     if (!projectId) return;
+    setConfirmedHypotheses([]);
     setSelectedSurveyId(null);
     setSelectedSurveyDetail(null);
     setEditingSurveyId(null);
     setSurveyGenerationNotice('');
+    if (isHrUser) void loadConfirmedHypotheses(projectId);
     void loadWorkspace(projectId);
     if (activeModule === 'organizationDiagnosis') void loadOrganizationDiagnosisOS();
     if (activeModule === 'diagnosis') void loadDiagnosisWorkspace();
@@ -2828,7 +2863,7 @@ export default function App() {
     setBusy(true);
     setError('');
     try {
-      await api.delete(`/diagnosis/hypotheses/${diagnosisDraft.id}`);
+      await api.delete(`/diagnostic-inputs/${diagnosisDraft.id}`);
       setSelectedDiagnosisId(null);
       setDiagnosisDraft({ ...blankDiagnosis, project_id: projectId });
       await loadDiagnosisWorkspace();
@@ -2868,6 +2903,10 @@ export default function App() {
   async function handleGenerateProjectSurvey() {
     const id = selectedProjectId;
     if (!id) return;
+    if (!selectedHypothesisIds.length) {
+      setError('请至少选择一个已确认诊断假设后再生成问卷。');
+      return;
+    }
     const typeTotal =
       modelQuestionForm.open_question_count +
       modelQuestionForm.rating_question_count +
@@ -2879,61 +2918,64 @@ export default function App() {
     }
     setBusy(true);
     setError('');
+    const generationPayload = {
+      project_id: id,
+      title: modelQuestionForm.title,
+      purpose: modelQuestionForm.purpose,
+      target_scope: modelQuestionForm.target_scope,
+      target_audience: modelQuestionForm.target_scope,
+      total_question_count: modelQuestionForm.total_question_count,
+      total_questions: modelQuestionForm.total_question_count,
+      questions_per_hypothesis: modelQuestionForm.questions_per_hypothesis,
+      questions_per_dimension: modelQuestionForm.questions_per_dimension,
+      open_question_count: modelQuestionForm.open_question_count,
+      rating_question_count: modelQuestionForm.rating_question_count,
+      choice_question_count: modelQuestionForm.choice_question_count,
+      review360_question_count: modelQuestionForm.review360_question_count,
+      question_type_counts: {
+        open_feedback: modelQuestionForm.open_question_count,
+        rating: modelQuestionForm.rating_question_count,
+        choice: modelQuestionForm.choice_question_count,
+        behavior_observation: modelQuestionForm.review360_question_count,
+      },
+      question_types: modelQuestionForm.question_types,
+      hypothesis_ids: selectedHypothesisIds,
+      dimension_ids: [],
+      competency_model_ids: modelQuestionForm.model_id
+        ? [Number(modelQuestionForm.model_id)]
+        : [],
+      average_by_hypothesis: modelQuestionForm.average_by_hypothesis,
+      weighted_by_dimension: modelQuestionForm.weighted_by_dimension,
+      ai_auto_fill: modelQuestionForm.ai_auto_fill,
+      source_mode: modelQuestionForm.source_mode,
+      model_id: modelQuestionForm.model_id
+        ? Number(modelQuestionForm.model_id)
+        : null,
+      status: 'active',
+    };
+    setLastSurveyGenerationPayload(generationPayload);
     try {
       const detail = await api.post<SurveyDetail>(
         `/projects/${id}/surveys/generate`,
-        {
-          title: modelQuestionForm.title,
-          purpose: modelQuestionForm.purpose,
-          target_scope: modelQuestionForm.target_scope,
-          target_audience: modelQuestionForm.target_scope,
-          total_question_count: modelQuestionForm.total_question_count,
-          total_questions: modelQuestionForm.total_question_count,
-          questions_per_hypothesis: modelQuestionForm.questions_per_hypothesis,
-          questions_per_dimension: modelQuestionForm.questions_per_dimension,
-          open_question_count: modelQuestionForm.open_question_count,
-          rating_question_count: modelQuestionForm.rating_question_count,
-          choice_question_count: modelQuestionForm.choice_question_count,
-          review360_question_count: modelQuestionForm.review360_question_count,
-          question_type_counts: {
-            open_feedback: modelQuestionForm.open_question_count,
-            rating: modelQuestionForm.rating_question_count,
-            choice: modelQuestionForm.choice_question_count,
-            behavior_observation: modelQuestionForm.review360_question_count,
-          },
-          question_types: modelQuestionForm.question_types,
-          hypothesis_ids: modelQuestionForm.hypothesis_ids,
-          dimension_ids: [],
-          competency_model_ids: modelQuestionForm.model_id
-            ? [Number(modelQuestionForm.model_id)]
-            : [],
-          average_by_hypothesis: modelQuestionForm.average_by_hypothesis,
-          weighted_by_dimension: modelQuestionForm.weighted_by_dimension,
-          ai_auto_fill: modelQuestionForm.ai_auto_fill,
-          source_mode: modelQuestionForm.source_mode,
-          model_id: modelQuestionForm.model_id
-            ? Number(modelQuestionForm.model_id)
-            : null,
-          status: 'active',
-        },
+        generationPayload,
       );
-      setSelectedSurveyId(detail.id);
-      setSelectedSurveyDetail(detail);
-      setEditingSurveyId(null);
+      await loadSurveysOS();
+      await loadSurveyDetail(detail.id);
       setSurveyGenerationNotice(
         detail.questions.length < modelQuestionForm.total_question_count
           ? `已生成 ${detail.questions.length} 题，少于目标 ${modelQuestionForm.total_question_count} 题。原因可能是已确认诊断假设、组织能力维度或胜任力模型的问题来源不足。`
           : `已生成 ${detail.questions.length} 题。`,
       );
-      await loadSurveysOS();
-      setTimeout(() => {
-        surveyDetailRef.current?.scrollIntoView({
-          behavior: 'smooth',
-          block: 'start',
-        });
-      }, 0);
       setNotice('问卷已生成，并进入问卷中心统一管理');
     } catch (err) {
+      if (import.meta.env.DEV) {
+        console.error('生成问卷失败', {
+          payload: generationPayload,
+          backendResponse: err,
+          selectedHypothesisIds,
+          confirmedHypothesesLength: confirmedHypotheses.length,
+        });
+      }
       setError(err instanceof Error ? err.message : '生成项目问卷失败');
     } finally {
       setBusy(false);
@@ -2955,6 +2997,9 @@ export default function App() {
           .filter((value): value is number => typeof value === 'number'),
       ),
     );
+    if (hypothesisIds.length) {
+      setSelectedHypothesisIds(hypothesisIds);
+    }
     setModelQuestionForm((form) => ({
       ...form,
       title: detail.title,
@@ -2979,20 +3024,19 @@ export default function App() {
   async function loadSurveyDetail(surveyId: number, options: { edit?: boolean } = {}) {
     const id = selectedProjectId;
     if (!id) return;
+    setSelectedSurveyId(surveyId);
+    setEditingSurveyId(options.edit ? surveyId : null);
     setBusy(true);
     setError('');
     try {
       const detail = await api.get<SurveyDetail>(
         `/projects/${id}/surveys/${surveyId}`,
       );
-      setSelectedSurveyId(surveyId);
       setSelectedSurveyDetail(detail);
       if (options.edit) {
-        setEditingSurveyId(surveyId);
         fillSurveyFormFromDetail(detail);
         setReview360Stage('questionnaireGenerate');
       } else {
-        setEditingSurveyId(null);
         setSurveyGenerationNotice('');
       }
       setTimeout(() => {
@@ -3040,7 +3084,7 @@ export default function App() {
                 id: -Date.now(),
                 project_id: detail.project_id,
                 survey_id: detail.id,
-                hypothesis_id: modelQuestionForm.hypothesis_ids[0] ?? null,
+                hypothesis_id: null,
                 model_id: modelQuestionForm.model_id
                   ? Number(modelQuestionForm.model_id)
                   : null,
@@ -3140,8 +3184,8 @@ export default function App() {
           })),
         },
       );
-      setSelectedSurveyDetail(saved);
       await loadSurveysOS();
+      await loadSurveyDetail(saved.id, { edit: Boolean(editingSurveyId) });
       setNotice(editingSurveyId ? '问卷修改已保存' : '问卷题目已保存');
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存问卷题目失败');
@@ -3186,16 +3230,8 @@ export default function App() {
       const copied = await api.post<SurveyDetail>(
         `/projects/${id}/surveys/${surveyId}/copy`,
       );
-      setSelectedSurveyId(copied.id);
-      setSelectedSurveyDetail(copied);
-      setEditingSurveyId(null);
       await loadSurveysOS();
-      setTimeout(() => {
-        surveyDetailRef.current?.scrollIntoView({
-          behavior: 'smooth',
-          block: 'start',
-        });
-      }, 0);
+      await loadSurveyDetail(copied.id);
       setNotice('问卷已复制为草稿');
     } catch (err) {
       setError(err instanceof Error ? err.message : '复制问卷失败');
@@ -3352,14 +3388,14 @@ export default function App() {
       };
       const saved = payload.id
         ? await api.put<DiagnosisHypothesis>(
-            `/diagnosis/hypotheses/${payload.id}`,
+            `/diagnostic-inputs/${payload.id}`,
             payload,
           )
-        : await api.post<DiagnosisHypothesis>('/diagnosis/hypotheses', payload);
+        : await api.post<DiagnosisHypothesis>('/diagnostic-inputs', payload);
       setDiagnosisDraft(saved);
       setSelectedDiagnosisId(saved.id ?? null);
       await loadDiagnosisWorkspace();
-      setNotice('诊断假设草稿已保存');
+      setNotice('诊断输入草稿已保存');
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存诊断假设失败');
     } finally {
@@ -3378,14 +3414,14 @@ export default function App() {
     try {
       let draft = diagnosisDraft;
       if (!draft.id) {
-        draft = await api.post<DiagnosisHypothesis>('/diagnosis/hypotheses', {
+        draft = await api.post<DiagnosisHypothesis>('/diagnostic-inputs', {
           ...diagnosisDraft,
           project_id: id,
           status: 'draft',
         });
       }
       const generated = await api.post<DiagnosisHypothesis>(
-        '/diagnosis/hypotheses/generate',
+        '/diagnostic-inputs/generate-hypotheses',
         {
           ...draft,
           project_id: id,
@@ -3407,15 +3443,38 @@ export default function App() {
   }
 
   async function handleConfirmDiagnosis() {
-    if (!diagnosisDraft.id) return;
+    const id = selectedProjectId;
+    if (!id || !diagnosisDraft.id) return;
     setBusy(true);
     setError('');
     try {
-      const confirmed = await api.post<DiagnosisHypothesis>(
-        `/diagnosis/hypotheses/${diagnosisDraft.id}/confirm`,
+      const saved = await api.put<DiagnosisHypothesis>(
+        `/diagnostic-inputs/${diagnosisDraft.id}`,
+        {
+          ...diagnosisDraft,
+          project_id: id,
+        },
       );
-      setDiagnosisDraft(confirmed);
+      const hypothesisIds = saved.ai_extracted_hypotheses
+        .map((item) => item.id)
+        .filter((itemId): itemId is number => typeof itemId === 'number');
+      if (!hypothesisIds.length) {
+        throw new Error('当前诊断输入还没有可确认的结构化诊断假设。');
+      }
+      await api.post<DiagnosisHypothesis[]>(
+        `/projects/${id}/diagnosis-hypotheses/confirm`,
+        { hypothesis_ids: hypothesisIds },
+      );
+      setDiagnosisDraft({
+        ...saved,
+        status: 'confirmed',
+        ai_extracted_hypotheses: saved.ai_extracted_hypotheses.map((item) => ({
+          ...item,
+          status: 'confirmed',
+        })),
+      });
       await loadDiagnosisWorkspace();
+      await loadConfirmedHypotheses(id);
       setNotice('诊断假设已确认，可进入胜任力与画像');
     } catch (err) {
       setError(err instanceof Error ? err.message : '确认诊断假设失败');
@@ -3468,12 +3527,6 @@ export default function App() {
 
   async function handleGenerateTalentModel() {
     const id = selectedProjectId;
-    const selectedHypothesisIds =
-      talentGenerationForm.hypothesis_ids.length > 0
-        ? talentGenerationForm.hypothesis_ids
-        : talentDraft.hypothesis_id
-          ? [talentDraft.hypothesis_id]
-          : [];
     if (!selectedHypothesisIds.length) {
       setError('请先选择至少一个已确认的诊断假设');
       return;
@@ -3491,7 +3544,6 @@ export default function App() {
         used_fallback: boolean;
       }>('/talent/models/generate', {
         project_id: id,
-        hypothesis_id: selectedHypothesisIds[0],
         hypothesis_ids: selectedHypothesisIds,
         template: talentDraft.template || 'AI 原生管理者模型',
         target_role: talentGenerationForm.target_role,
@@ -3626,10 +3678,10 @@ export default function App() {
   async function handleGenerateQuestionnaireFromModel() {
     if (
       !projectId ||
-      !modelQuestionForm.hypothesis_id ||
+      !selectedHypothesisIds.length ||
       !modelQuestionForm.model_id
     ) {
-      setError('请先选择项目、诊断假设和胜任力模型');
+      setError('请先选择项目、至少一个已确认诊断假设和胜任力模型');
       return;
     }
     setBusy(true);
@@ -3642,7 +3694,7 @@ export default function App() {
         }
       >('/360/questionnaire/generate-from-model', {
         project_id: projectId,
-        hypothesis_id: Number(modelQuestionForm.hypothesis_id),
+        hypothesis_ids: selectedHypothesisIds,
         model_id: Number(modelQuestionForm.model_id),
         target_level: modelQuestionForm.target_level,
         relation_types: modelQuestionForm.relation_types,
@@ -3652,8 +3704,8 @@ export default function App() {
       });
       setQuestionnaire(result);
       if (result.survey) {
-        setSelectedSurveyId(result.survey.id);
-        setSelectedSurveyDetail(result.survey);
+        await loadSurveysOS();
+        await loadSurveyDetail(result.survey.id);
       }
       await loadWorkspace(projectId);
       setNotice(
@@ -4239,8 +4291,38 @@ export default function App() {
         <main className="mx-auto grid max-w-7xl gap-5 px-5 py-6 lg:px-8">
           {renderStatus()}
           {children}
+          {renderDevelopmentDebugPanel()}
         </main>
       </div>
+    );
+  }
+
+  function renderDevelopmentDebugPanel() {
+    if (!import.meta.env.DEV || !isHrUser) return null;
+    return (
+      <section className="rounded-lg border border-dashed border-slate-300 bg-slate-950 p-4 text-xs leading-6 text-slate-100">
+        <p className="font-black">调试信息，仅本地开发使用</p>
+        <div className="mt-2 grid gap-1 md:grid-cols-2">
+          <p>当前项目 ID：{selectedProjectId ?? '未选择'}</p>
+          <p>已确认诊断假设数量：{confirmedHypotheses.length}</p>
+          <p className="md:col-span-2">
+            已确认诊断假设：{confirmedHypotheses.map(hypothesisTitle).join('、') || '暂无'}
+          </p>
+          <p>胜任力生成已选 ID：{selectedHypothesisIds.join('、') || '未选择'}</p>
+          <p>
+            问卷生成已选 ID：{modelQuestionForm.hypothesis_ids.join('、') || '未选择'}
+          </p>
+          <p>问卷数量：{surveys.length}</p>
+          <p>当前问卷 ID：{selectedSurveyId ?? '未选择'}</p>
+          <p>当前问卷题目数量：{surveyQuestions.length}</p>
+          <p className="md:col-span-2 break-all">
+            最近生成问卷参数：
+            {lastSurveyGenerationPayload
+              ? JSON.stringify(lastSurveyGenerationPayload)
+              : '尚未生成'}
+          </p>
+        </div>
+      </section>
     );
   }
 
@@ -5034,7 +5116,7 @@ export default function App() {
 
     const renderSurveyDetail = () => {
       if (!selectedSurveyDetail) return null;
-      const filteredQuestions = selectedSurveyDetail.questions.filter(
+      const filteredQuestions = surveyQuestions.filter(
         (question) =>
           (!surveyQuestionFilters.hypothesis_id ||
             String(question.hypothesis_id ?? '') ===
@@ -5048,10 +5130,8 @@ export default function App() {
           (!surveyQuestionFilters.target_role ||
             question.target_role === surveyQuestionFilters.target_role),
       );
-      const byHypothesis = diagnosisList
-        .filter((item) => item.status === 'confirmed')
-        .map((hypothesis) => {
-          const questions = selectedSurveyDetail.questions.filter(
+      const byHypothesis = confirmedHypotheses.map((hypothesis) => {
+          const questions = surveyQuestions.filter(
             (question) => question.hypothesis_id === hypothesis.id,
           );
           const typeCounts = questions.reduce<Record<string, number>>(
@@ -5104,7 +5184,7 @@ export default function App() {
             </div>
             <div>
               <p className="text-xs font-bold text-slate-500">题目总数</p>
-              <p className="mt-1 text-slate-700">{selectedSurveyDetail.questions.length} 题</p>
+              <p className="mt-1 text-slate-700">{surveyQuestions.length} 题</p>
             </div>
             <div>
               <p className="text-xs font-bold text-slate-500">完成率</p>
@@ -5152,9 +5232,7 @@ export default function App() {
                 }
               >
                 <option value="">全部</option>
-                {diagnosisList
-                  .filter((item) => item.status === 'confirmed')
-                  .map((item) => (
+                {confirmedHypotheses.map((item) => (
                     <option key={item.id} value={item.id}>
                       {hypothesisTitle(item)}
                     </option>
@@ -5175,7 +5253,7 @@ export default function App() {
                 <option value="">全部</option>
                 {Array.from(
                   new Set(
-                    selectedSurveyDetail.questions.map(
+                    surveyQuestions.map(
                       (question) => question.dimension_key,
                     ),
                   ),
@@ -5353,9 +5431,7 @@ export default function App() {
                       }
                     >
                       <option value="">不关联</option>
-                      {diagnosisList
-                        .filter((item) => item.status === 'confirmed')
-                        .map((item) => (
+                      {confirmedHypotheses.map((item) => (
                           <option key={item.id} value={item.id}>
                             {hypothesisTitle(item)}
                           </option>
@@ -5426,7 +5502,7 @@ export default function App() {
             )) : (
               <EmptyState
                 title="这份问卷暂无题目"
-                body="这份问卷暂无题目，请点击编辑问卷或重新生成题目。"
+                body="这份问卷暂无题目，请重新生成或编辑问卷。"
               />
             )}
           </div>
@@ -5463,31 +5539,33 @@ export default function App() {
                   问卷设计只负责确定证据收集方案，不直接生成最终问卷。请在这里确认要验证哪些诊断假设、覆盖哪些组织能力维度、引用哪些胜任力模型、采用哪些题型和评审关系。
                 </p>
                 <div className="grid gap-3 md:grid-cols-3">
-                  {miniMetric('已确认诊断假设', diagnosisList.filter((item) => item.status === 'confirmed').length)}
+                  {miniMetric('已确认诊断假设', confirmedHypotheses.length)}
                   {miniMetric('组织能力维度', orgDiagnosisQuestions.length)}
                   {miniMetric('胜任力模型', talentModels.length)}
                 </div>
                 <div className="grid gap-3 md:grid-cols-2">
                   <Field label="本次问卷要验证的诊断假设">
                     <div className="grid max-h-64 gap-2 overflow-auto rounded-lg border border-slate-200 bg-white p-3">
-                      {diagnosisList
-                        .filter((item) => item.status === 'confirmed')
-                        .map((item) => {
+                      {confirmedHypotheses.map((item) => {
                           const idValue = item.id;
                           if (!idValue) return null;
                           return (
                             <label key={idValue} className="flex gap-2 text-sm">
                               <input
                                 type="checkbox"
-                                checked={modelQuestionForm.hypothesis_ids.includes(idValue)}
-                                onChange={(event) =>
+                                checked={selectedHypothesisIds.includes(idValue)}
+                                onChange={(event) => {
+                                  const next = event.target.checked
+                                    ? [...selectedHypothesisIds, idValue]
+                                    : selectedHypothesisIds.filter(
+                                        (id) => id !== idValue,
+                                      );
+                                  setSelectedHypothesisIds(next);
                                   setModelQuestionForm({
                                     ...modelQuestionForm,
-                                    hypothesis_ids: event.target.checked
-                                      ? [...modelQuestionForm.hypothesis_ids, idValue]
-                                      : modelQuestionForm.hypothesis_ids.filter((id) => id !== idValue),
-                                  })
-                                }
+                                    hypothesis_ids: next,
+                                  });
+                                }}
                               />
                               <span>
                                 {hypothesisTitle(item)}
@@ -6231,7 +6309,7 @@ export default function App() {
     ];
     const inputs = [
       ['项目目标', currentProject?.purpose || currentProject?.description || '未填写'],
-      ['已确认诊断假设', `${diagnosisList.filter((item) => item.status === 'confirmed').length} 条`],
+      ['已确认诊断假设', `${confirmedHypotheses.length} 条`],
       ['组织能力维度', `${orgDiagnosisQuestions.length} 个`],
       ['胜任力模型', `${talentModels.length} 个`],
       ['问卷统计', `${surveys.length} 份问卷`],
@@ -7370,6 +7448,7 @@ export default function App() {
               />
             )}
           </Panel>
+          {renderDevelopmentDebugPanel()}
         </main>
       </div>
     );
@@ -7898,7 +7977,7 @@ export default function App() {
               </div>
             </Panel>
 
-            <Panel title="已保存假设">
+            <Panel title="已保存诊断输入">
               {diagnosisList.length ? (
                 <div className="grid gap-2">
                   {diagnosisList.map((item) => (
@@ -7922,8 +8001,8 @@ export default function App() {
                 </div>
               ) : (
                 <EmptyState
-                  title="暂无诊断假设"
-                  body="保存草稿后会显示在这里。"
+                  title="暂无诊断输入"
+                  body="保存诊断输入草稿后会显示在这里。结构化诊断假设将在下方单独生成和确认。"
                 />
               )}
             </Panel>
@@ -7976,13 +8055,11 @@ export default function App() {
                     setTalentDraft({
                       ...blankTalentModel,
                       project_id: diagnosisDraft.project_id ?? projectId,
-                      hypothesis_id: diagnosisDraft.id ?? null,
+                      hypothesis_id: null,
                     });
                     setTalentGenerationForm({
                       ...talentGenerationForm,
-                      hypothesis_ids: diagnosisDraft.id
-                        ? [diagnosisDraft.id]
-                        : [],
+                      hypothesis_ids: selectedHypothesisIds,
                     });
                     goModule('talentOverview');
                   }}
@@ -8102,6 +8179,7 @@ export default function App() {
               />
             )}
           </Panel>
+          {renderDevelopmentDebugPanel()}
         </main>
       </div>
     );
@@ -8109,9 +8187,6 @@ export default function App() {
 
   function renderTalentModelPage() {
     if (!currentUser || !isHrUser) return renderLoginPage();
-    const confirmedHypotheses = diagnosisList.filter(
-      (item) => item.status === 'confirmed',
-    );
     return (
       <div className="min-h-screen bg-slate-100 text-slate-900">
         {renderGlobalHeader('胜任力与画像')}
@@ -8222,9 +8297,10 @@ export default function App() {
                           ...talentGenerationForm,
                           hypothesis_ids: ids,
                         });
+                        setSelectedHypothesisIds(ids);
                         setTalentDraft({
                           ...talentDraft,
-                          hypothesis_id: ids[0] ?? null,
+                          hypothesis_id: null,
                         });
                       }}
                     >
@@ -8234,7 +8310,7 @@ export default function App() {
                       const id = item.id;
                       if (!id) return null;
                       const checked =
-                        talentGenerationForm.hypothesis_ids.includes(id);
+                        selectedHypothesisIds.includes(id);
                       return (
                         <label
                           key={id}
@@ -8246,17 +8322,18 @@ export default function App() {
                             checked={checked}
                             onChange={(event) => {
                               const next = event.target.checked
-                                ? [...talentGenerationForm.hypothesis_ids, id]
-                                : talentGenerationForm.hypothesis_ids.filter(
+                                ? [...selectedHypothesisIds, id]
+                                : selectedHypothesisIds.filter(
                                     (value) => value !== id,
                                   );
+                              setSelectedHypothesisIds(next);
                               setTalentGenerationForm({
                                 ...talentGenerationForm,
                                 hypothesis_ids: next,
                               });
                               setTalentDraft({
                                 ...talentDraft,
-                                hypothesis_id: next[0] ?? null,
+                                hypothesis_id: null,
                               });
                             }}
                           />
@@ -8319,7 +8396,7 @@ export default function App() {
                 </Field>
                 <Button
                   onClick={handleGenerateTalentModel}
-                  disabled={busy || !talentGenerationForm.hypothesis_ids.length}
+                  disabled={busy || !selectedHypothesisIds.length}
                 >
                   <Sparkles size={16} />
                   AI 生成胜任力模型
@@ -8347,11 +8424,14 @@ export default function App() {
                   onClick={() => {
                     setModelQuestionForm({
                       ...modelQuestionForm,
-                      hypothesis_id: String(talentDraft.hypothesis_id ?? ''),
+                      hypothesis_id: '',
+                      hypothesis_ids: selectedHypothesisIds,
                       model_id: String(talentDraft.id ?? ''),
                       constraints:
-                        diagnosisList.find(
-                          (item) => item.id === talentDraft.hypothesis_id,
+                        confirmedHypotheses.find((item) =>
+                          selectedHypothesisIds.includes(
+                            item.id ?? -1,
+                          ),
                         )?.constraints || modelQuestionForm.constraints,
                     });
                     setActiveTab('questionnaire');
@@ -8659,6 +8739,7 @@ export default function App() {
               </div>
             </div>
           ) : null}
+          {renderDevelopmentDebugPanel()}
         </main>
       </div>
     );
@@ -8666,9 +8747,6 @@ export default function App() {
 
   function renderDiagnosisRulesPage() {
     if (!currentUser || !isHrUser) return renderLoginPage();
-    const confirmedHypotheses = diagnosisList.filter(
-      (item) => item.status === 'confirmed',
-    );
     const availableModels = talentModels.filter(
       (model) => model.status === 'draft' || model.status === 'confirmed',
     );
@@ -9230,9 +9308,6 @@ export default function App() {
 
   function renderDiagnosisReportsPage() {
     if (!currentUser || !isHrUser) return renderLoginPage();
-    const confirmedHypotheses = diagnosisList.filter(
-      (item) => item.status === 'confirmed',
-    );
     const availableModels = talentModels.filter(
       (model) => model.status === 'draft' || model.status === 'confirmed',
     );
@@ -10146,9 +10221,6 @@ export default function App() {
 
   function renderQuestionnairePage() {
     const questionnaireDimensions = questionnaire.dimensions ?? [];
-    const confirmedHypotheses = diagnosisList.filter(
-      (item) => item.status === 'confirmed',
-    );
     const availableTalentModels = talentModels.filter(
       (model) => model.status === 'draft' || model.status === 'confirmed',
     );
@@ -10247,7 +10319,7 @@ export default function App() {
               onClick={handleGenerateQuestionnaireFromModel}
               disabled={
                 busy ||
-                !modelQuestionForm.hypothesis_id ||
+                !selectedHypothesisIds.length ||
                 !modelQuestionForm.model_id
               }
             >
@@ -10261,29 +10333,34 @@ export default function App() {
           </p>
           <div className="mt-4 grid gap-4 md:grid-cols-2">
             <Field label="选择诊断假设">
-              <select
-                className={inputClass}
-                value={modelQuestionForm.hypothesis_id}
-                onChange={(event) => {
-                  const selected = diagnosisList.find(
-                    (item) => item.id === Number(event.target.value),
+              <div className="grid max-h-64 gap-2 overflow-auto rounded-lg border border-slate-200 bg-white p-3">
+                {confirmedHypotheses.map((item) => {
+                  const hypothesisId = item.id;
+                  if (!hypothesisId) return null;
+                  return (
+                    <label key={hypothesisId} className="flex gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={selectedHypothesisIds.includes(hypothesisId)}
+                        onChange={(event) => {
+                          const next = event.target.checked
+                            ? [...selectedHypothesisIds, hypothesisId]
+                            : selectedHypothesisIds.filter(
+                                (id) => id !== hypothesisId,
+                              );
+                          setSelectedHypothesisIds(next);
+                          setModelQuestionForm({
+                            ...modelQuestionForm,
+                            hypothesis_id: '',
+                            hypothesis_ids: next,
+                          });
+                        }}
+                      />
+                      <span>#{hypothesisId} · {hypothesisTitle(item)}</span>
+                    </label>
                   );
-                  setModelQuestionForm({
-                    ...modelQuestionForm,
-                    hypothesis_id: event.target.value,
-                    constraints:
-                      selected?.constraints || modelQuestionForm.constraints,
-                  });
-                }}
-              >
-                <option value="">请选择已确认诊断假设</option>
-                {confirmedHypotheses.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    #{item.id} ·{' '}
-                    {hypothesisTitle(item)}
-                  </option>
-                ))}
-              </select>
+                })}
+              </div>
             </Field>
             <Field label="选择胜任力模型">
               <select

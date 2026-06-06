@@ -231,6 +231,10 @@ class DiagnosisHypothesisPayload(BaseModel):
     status: Literal["draft", "generated", "confirmed"] = "draft"
 
 
+class DiagnosisHypothesisConfirmPayload(BaseModel):
+    hypothesis_ids: list[int] = Field(default_factory=list)
+
+
 class TalentDimensionPayload(BaseModel):
     id: int | None = None
     name: str = Field(min_length=1)
@@ -275,7 +279,7 @@ class TalentModelGeneratePayload(BaseModel):
 
 class QuestionnaireFromModelPayload(BaseModel):
     project_id: int
-    hypothesis_id: int
+    hypothesis_ids: list[int] = Field(default_factory=list)
     model_id: int
     target_level: str = "管理者"
     relation_types: list[str] = Field(default_factory=lambda: ["上级", "同级", "下级", "协作方"])
@@ -442,8 +446,8 @@ class SurveyGeneratePayload(BaseModel):
     questions_per_hypothesis: int = 2
     questions_per_dimension: int = 1
     open_question_count: int = 3
-    rating_question_count: int = 18
-    choice_question_count: int = 3
+    rating_question_count: int = 15
+    choice_question_count: int = 0
     review360_question_count: int = 6
     question_type_counts: dict[str, int] = Field(default_factory=dict)
     question_types: list[str] = Field(default_factory=lambda: ["rating", "open_feedback", "behavior_observation"])
@@ -1480,7 +1484,12 @@ def serialize_survey_question(row: Any) -> dict[str, Any]:
     return item
 
 
-def survey_questions_for_sources(conn: Any, project_id: int, source_mode: str, model_id: int | None = None) -> list[dict[str, Any]]:
+def survey_questions_for_sources(
+    conn: Any,
+    project_id: int,
+    source_mode: str,
+    model_ids: list[int] | None = None,
+) -> list[dict[str, Any]]:
     questions: list[dict[str, Any]] = []
     if source_mode in {"org_diagnosis", "combined"}:
         hypothesis_rows = conn.execute(
@@ -1492,7 +1501,7 @@ def survey_questions_for_sources(conn: Any, project_id: int, source_mode: str, m
             (project_id,),
         ).fetchall()
         for hypothesis_row in hypothesis_rows:
-            hypothesis = serialize_diagnosis(hypothesis_row)
+            hypothesis = serialize_diagnosis_hypothesis_item(hypothesis_row)
             extracted_items = hypothesis["ai_extracted_hypotheses"] or [
                 {
                     "hypothesis_title": hypothesis["target_scope"],
@@ -1545,8 +1554,13 @@ def survey_questions_for_sources(conn: Any, project_id: int, source_mode: str, m
                     }
                 )
     if source_mode in {"talent_model", "combined"}:
-        model_clause = "AND tm.id = ?" if model_id else ""
-        params: tuple[Any, ...] = (project_id, model_id) if model_id else (project_id,)
+        selected_model_ids = list(dict.fromkeys(model_ids or []))
+        model_clause = ""
+        params: tuple[Any, ...] = (project_id,)
+        if selected_model_ids:
+            placeholders = ",".join("?" for _ in selected_model_ids)
+            model_clause = f"AND tm.id IN ({placeholders})"
+            params = (project_id, *selected_model_ids)
         rows = conn.execute(
             f"""
             SELECT td.*, tm.id AS model_id, tm.name AS model_name
@@ -1632,7 +1646,33 @@ def apply_survey_generation_config(
         questions = filtered or questions
 
     target_total = max(int(payload.total_question_count or len(questions)), 1)
-    selected_questions = questions[:target_total]
+    requested_counts = {
+        "open_feedback": max(payload.open_question_count, 0),
+        "rating": max(payload.rating_question_count, 0),
+        "choice": max(payload.choice_question_count, 0),
+        "behavior_observation": max(payload.review360_question_count, 0),
+    }
+    if sum(requested_counts.values()) > target_total:
+        raise HTTPException(
+            status_code=400,
+            detail="各题型数量合计不能超过总题数，请调整生成配置。",
+        )
+    selected_questions: list[dict[str, Any]] = []
+    selected_object_ids: set[int] = set()
+    for question_type, requested_count in requested_counts.items():
+        matches = [
+            question
+            for question in questions
+            if question.get("question_type") == question_type
+        ][:requested_count]
+        selected_questions.extend(matches)
+        selected_object_ids.update(id(question) for question in matches)
+    selected_questions.extend(
+        question
+        for question in questions
+        if id(question) not in selected_object_ids
+    )
+    selected_questions = selected_questions[:target_total]
     if payload.ai_auto_fill and selected_questions:
         seed = selected_questions[:]
         while len(selected_questions) < target_total:
@@ -2024,13 +2064,117 @@ def serialize_diagnosis(row: Any) -> dict[str, Any]:
     item["focus_issues"] = loads_json(item.get("focus_issues"), [])
     item["expected_outputs"] = loads_json(item.get("expected_outputs"), [])
     item["ai_extracted_hypotheses"] = loads_json(item.get("ai_extracted_hypotheses"), [])
-    first = item["ai_extracted_hypotheses"][0] if item["ai_extracted_hypotheses"] else {}
+    first = next(iter(item["ai_extracted_hypotheses"]), {})
     item["title"] = first.get("hypothesis_title") or item.get("target_scope") or f"诊断假设 {item.get('id')}"
     item["description"] = first.get("hypothesis_detail") or item.get("hr_core_judgment") or ""
     item["problem_type"] = first.get("problem_type") or ""
     item["evidence_needed"] = first.get("suggested_validation_method") or item.get("constraints") or ""
     item["related_dimensions"] = first.get("related_talent_dimensions") or []
     return item
+
+
+def serialize_diagnosis_hypothesis_item(row: Any) -> dict[str, Any]:
+    item = as_dict(row)
+    related_dimensions = loads_json(item.get("related_dimensions"), [])
+    suggested_data_sources = loads_json(item.get("suggested_data_sources"), [])
+    extracted = {
+        "id": item["id"],
+        "project_id": item["project_id"],
+        "hypothesis_title": item["title"],
+        "hypothesis_detail": item["description"],
+        "problem_type": item["problem_type"],
+        "suggested_validation_method": item["evidence_needed"],
+        "suggested_data_sources": suggested_data_sources,
+        "related_talent_dimensions": related_dimensions,
+        "status": item["status"],
+        "created_at": item["created_at"],
+        "updated_at": item["updated_at"],
+    }
+    return {
+        **item,
+        "diagnostic_input_id": item["diagnostic_input_id"],
+        "description": item["description"],
+        "evidence_needed": item["evidence_needed"],
+        "related_dimensions": related_dimensions,
+        "suggested_data_sources": suggested_data_sources,
+        "target_scope": "",
+        "diagnosis_purpose": [],
+        "company_stage": "",
+        "hr_core_judgment": item["description"],
+        "target_talent": "",
+        "focus_issues": related_dimensions,
+        "constraints": item["evidence_needed"],
+        "expected_outputs": suggested_data_sources,
+        "ai_extracted_hypotheses": [extracted],
+    }
+
+
+def hypothesis_items_for_input(conn: Any, diagnostic_input_id: int) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT * FROM diagnosis_hypotheses
+        WHERE diagnostic_input_id = ?
+        ORDER BY source_index, id
+        """,
+        (diagnostic_input_id,),
+    ).fetchall()
+    return [serialize_diagnosis_hypothesis_item(row) for row in rows]
+
+
+def serialize_diagnostic_input(conn: Any, row: Any) -> dict[str, Any]:
+    item = serialize_diagnosis(row)
+    hypothesis_items = hypothesis_items_for_input(conn, item["id"])
+    if hypothesis_items:
+        item["ai_extracted_hypotheses"] = [
+            next(iter(hypothesis["ai_extracted_hypotheses"]))
+            for hypothesis in hypothesis_items
+        ]
+    return item
+
+
+def replace_generated_hypothesis_items(
+    conn: Any,
+    project_id: int,
+    diagnostic_input_id: int,
+    hypotheses: list[dict[str, Any]],
+) -> None:
+    conn.execute(
+        """
+        DELETE FROM diagnosis_hypotheses
+        WHERE project_id = ? AND diagnostic_input_id = ? AND status != 'confirmed'
+        """,
+        (project_id, diagnostic_input_id),
+    )
+    last_confirmed_index = conn.execute(
+        """
+        SELECT COALESCE(MAX(source_index), -1) AS source_index
+        FROM diagnosis_hypotheses
+        WHERE project_id = ? AND diagnostic_input_id = ? AND status = 'confirmed'
+        """,
+        (project_id, diagnostic_input_id),
+    ).fetchone()["source_index"]
+    for source_index, hypothesis in enumerate(hypotheses):
+        stored_index = int(last_confirmed_index) + source_index + 1
+        conn.execute(
+            """
+            INSERT INTO diagnosis_hypotheses
+                (project_id, diagnostic_input_id, source_index, title, description,
+                 problem_type, evidence_needed, related_dimensions,
+                 suggested_data_sources, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')
+            """,
+            (
+                project_id,
+                diagnostic_input_id,
+                stored_index,
+                hypothesis.get("hypothesis_title", ""),
+                hypothesis.get("hypothesis_detail", ""),
+                hypothesis.get("problem_type", "organization"),
+                hypothesis.get("suggested_validation_method", ""),
+                dumps(hypothesis.get("related_talent_dimensions", [])),
+                dumps(hypothesis.get("suggested_data_sources", [])),
+            ),
+        )
 
 
 def fallback_talent_model(template: str) -> dict[str, Any]:
@@ -2237,7 +2381,7 @@ def fallback_questions_from_model(payload: QuestionnaireFromModelPayload, model:
         questions.append(
             {
                 "project_id": payload.project_id,
-                "hypothesis_id": payload.hypothesis_id,
+                "hypothesis_id": payload.hypothesis_ids[index % len(payload.hypothesis_ids)],
                 "model_id": payload.model_id,
                 "dimension_name": name,
                 "content": content,
@@ -2310,7 +2454,7 @@ def save_model_questionnaire(
                 "open_followup": question.get("open_followup", ""),
                 "weight": question.get("weight", 1.0),
                 "required": True,
-                "hypothesis_id": payload.hypothesis_id,
+                "hypothesis_id": question.get("hypothesis_id"),
                 "model_id": payload.model_id,
                 "sort_order": index,
             }
@@ -2342,6 +2486,8 @@ def save_model_questionnaire(
     questionnaire["questions"] = saved_questions
     survey_questions = [
         {
+            "hypothesis_id": question.get("hypothesis_id"),
+            "model_id": question.get("model_id"),
             "source_type": question.get("source_type", "ai_model"),
             "question_type": question.get("question_type", "rating"),
             "dimension_key": f"dimension_{question.get('dimension_id')}",
@@ -2667,7 +2813,7 @@ def build_diagnosis_context(conn: Any, project_id: int, hypothesis_id: int | Non
     model = None
     if hypothesis_id:
         row = conn.execute("SELECT * FROM diagnosis_hypotheses WHERE id = ?", (hypothesis_id,)).fetchone()
-        hypothesis = serialize_diagnosis(row) if row else None
+        hypothesis = serialize_diagnosis_hypothesis_item(row) if row else None
     if model_id:
         row = conn.execute("SELECT * FROM talent_models WHERE id = ?", (model_id,)).fetchone()
         model = serialize_talent_model(conn, row) if row else None
@@ -2686,6 +2832,13 @@ def fallback_diagnosis_report(context: dict[str, Any], report_type: str, include
     low_text = "、".join([f"{row['name']}({row['avg_score']})" for row in low_dimensions]) or "暂无足够评分数据"
     risk_text = "、".join([risk["title"] for risk in context.get("organization_risks", [])[:3]]) or "暂无已生成组织风险"
     cluster_text = "、".join([cluster["theme"] for cluster in context.get("feedback_clusters", [])[:3]]) or "暂无反馈聚类"
+    hypothesis_items = context.get("hypotheses") or (
+        [context["hypothesis"]] if context.get("hypothesis") else []
+    )
+    hypothesis_text = "、".join(
+        str(item.get("title") or "未命名诊断假设")
+        for item in hypothesis_items
+    ) or "暂无已确认假设"
     action_section = """
 ## 30/60/90 天行动计划
 ### 30 天
@@ -2708,7 +2861,7 @@ def fallback_diagnosis_report(context: dict[str, Any], report_type: str, include
 当前项目完成率为 {analytics.get('completion_rate', 0)}%，覆盖 {analytics.get('employee_count', 0)} 名员工。MVP 诊断建议将评分差异、员工声音和管理员诊断假设合并解读。
 
 ## 本次诊断假设
-{context.get('hypothesis', {}).get('ai_extracted_hypotheses', [{'hypothesis_title': '暂无已确认假设'}])[0].get('hypothesis_title', '暂无已确认假设') if context.get('hypothesis') else '暂无已确认假设'}
+{hypothesis_text}
 
 ## 关键发现
 - 低分或待关注维度：{low_text}
@@ -3169,7 +3322,7 @@ def inspect_questionnaire(project_id: int) -> dict[str, Any]:
     return {"issues": issues, "ai_run_id": ai_run_id, "used_fallback": used_fallback}
 
 
-@app.post("/api/diagnosis/hypotheses")
+@app.post("/api/diagnostic-inputs")
 def create_diagnosis_hypothesis(
     payload: DiagnosisHypothesisPayload,
     authorization: str | None = Header(default=None),
@@ -3181,7 +3334,7 @@ def create_diagnosis_hypothesis(
         fetch_one_or_404(conn, "SELECT id FROM projects WHERE id = ?", (payload.project_id,), "project")
         cur = conn.execute(
             """
-            INSERT INTO diagnosis_hypotheses
+            INSERT INTO diagnostic_inputs
                 (project_id, created_by, target_scope, diagnosis_purpose, company_stage,
                  hr_core_judgment, target_talent, focus_issues, constraints, expected_outputs,
                  ai_extracted_hypotheses, status)
@@ -3202,57 +3355,96 @@ def create_diagnosis_hypothesis(
                 payload.status,
             ),
         )
-        return serialize_diagnosis(
-            fetch_one_or_404(conn, "SELECT * FROM diagnosis_hypotheses WHERE id = ?", (int(cur.lastrowid),), "diagnosis hypothesis")
+        input_id = int(cur.lastrowid)
+        if payload.ai_extracted_hypotheses:
+            replace_generated_hypothesis_items(
+                conn,
+                payload.project_id,
+                input_id,
+                normalize_hypotheses(
+                    [
+                        item
+                        for item in payload.ai_extracted_hypotheses
+                        if item.get("status") != "confirmed"
+                    ]
+                ),
+            )
+        return serialize_diagnostic_input(
+            conn,
+            fetch_one_or_404(
+                conn,
+                "SELECT * FROM diagnostic_inputs WHERE id = ?",
+                (input_id,),
+                "diagnostic input",
+            ),
         )
 
 
 @app.get("/api/diagnosis/hypotheses")
 def list_diagnosis_hypotheses(
     project_id: int | None = None,
-    status: Literal["draft", "generated", "confirmed"] | None = None,
+    status: Literal["draft", "generated", "confirmed", "archived"] | None = None,
     authorization: str | None = Header(default=None),
 ) -> list[dict[str, Any]]:
     require_admin_user(authorization)
     with get_connection() as conn:
         where: list[str] = []
         params: list[Any] = []
+        if status is not None:
+            where.append("status = ?")
+            params.append(status)
         if project_id is not None:
             fetch_one_or_404(conn, "SELECT id FROM projects WHERE id = ?", (project_id,), "project")
             where.append("project_id = ?")
             params.append(project_id)
-        if status:
-            where.append("status = ?")
-            params.append(status)
         query = "SELECT * FROM diagnosis_hypotheses"
         if where:
             query += " WHERE " + " AND ".join(where)
         query += " ORDER BY updated_at DESC, id DESC"
         rows = conn.execute(query, tuple(params)).fetchall()
-        return [serialize_diagnosis(row) for row in rows]
+        return [serialize_diagnosis_hypothesis_item(row) for row in rows]
 
 
 @app.get("/api/projects/{project_id}/diagnosis-hypotheses")
 def list_project_diagnosis_hypotheses(
     project_id: int,
-    status: Literal["draft", "generated", "confirmed"] | None = None,
+    status: Literal["draft", "generated", "confirmed", "archived"] | None = None,
     authorization: str | None = Header(default=None),
 ) -> list[dict[str, Any]]:
     return list_diagnosis_hypotheses(project_id=project_id, status=status, authorization=authorization)
 
 
-@app.get("/api/diagnosis/hypotheses/{hypothesis_id}")
+@app.get("/api/projects/{project_id}/diagnostic-inputs")
+def list_project_diagnostic_inputs(
+    project_id: int,
+    authorization: str | None = Header(default=None),
+) -> list[dict[str, Any]]:
+    require_admin_user(authorization)
+    with get_connection() as conn:
+        fetch_one_or_404(conn, "SELECT id FROM projects WHERE id = ?", (project_id,), "project")
+        rows = conn.execute(
+            """
+            SELECT * FROM diagnostic_inputs
+            WHERE project_id = ?
+            ORDER BY updated_at DESC, id DESC
+            """,
+            (project_id,),
+        ).fetchall()
+        return [serialize_diagnostic_input(conn, row) for row in rows]
+
+
+@app.get("/api/diagnostic-inputs/{hypothesis_id}")
 def get_diagnosis_hypothesis(
     hypothesis_id: int,
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
     require_admin_user(authorization)
     with get_connection() as conn:
-        row = fetch_one_or_404(conn, "SELECT * FROM diagnosis_hypotheses WHERE id = ?", (hypothesis_id,), "diagnosis hypothesis")
-        return serialize_diagnosis(row)
+        row = fetch_one_or_404(conn, "SELECT * FROM diagnostic_inputs WHERE id = ?", (hypothesis_id,), "diagnostic input")
+        return serialize_diagnostic_input(conn, row)
 
 
-@app.put("/api/diagnosis/hypotheses/{hypothesis_id}")
+@app.put("/api/diagnostic-inputs/{hypothesis_id}")
 def update_diagnosis_hypothesis(
     hypothesis_id: int,
     payload: DiagnosisHypothesisPayload,
@@ -3260,13 +3452,13 @@ def update_diagnosis_hypothesis(
 ) -> dict[str, Any]:
     require_admin_user(authorization)
     with get_connection() as conn:
-        before = fetch_one_or_404(conn, "SELECT * FROM diagnosis_hypotheses WHERE id = ?", (hypothesis_id,), "diagnosis hypothesis")
+        before = fetch_one_or_404(conn, "SELECT * FROM diagnostic_inputs WHERE id = ?", (hypothesis_id,), "diagnostic input")
         if payload.project_id is None:
             raise HTTPException(status_code=400, detail="project_id is required")
         fetch_one_or_404(conn, "SELECT id FROM projects WHERE id = ?", (payload.project_id,), "project")
         conn.execute(
             """
-            UPDATE diagnosis_hypotheses
+            UPDATE diagnostic_inputs
             SET project_id = ?, target_scope = ?, diagnosis_purpose = ?, company_stage = ?,
                 hr_core_judgment = ?, target_talent = ?, focus_issues = ?, constraints = ?,
                 expected_outputs = ?, ai_extracted_hypotheses = ?, status = ?, updated_at = CURRENT_TIMESTAMP
@@ -3287,12 +3479,25 @@ def update_diagnosis_hypothesis(
                 hypothesis_id,
             ),
         )
-        after = fetch_one_or_404(conn, "SELECT * FROM diagnosis_hypotheses WHERE id = ?", (hypothesis_id,), "diagnosis hypothesis")
-        record_edit(conn, payload.project_id, None, "diagnosis_hypothesis", hypothesis_id, serialize_diagnosis(before), serialize_diagnosis(after))
-        return serialize_diagnosis(after)
+        replace_generated_hypothesis_items(
+            conn,
+            payload.project_id,
+            hypothesis_id,
+            normalize_hypotheses(
+                [
+                    item
+                    for item in payload.ai_extracted_hypotheses
+                    if item.get("status") != "confirmed"
+                ]
+            ),
+        )
+        after = fetch_one_or_404(conn, "SELECT * FROM diagnostic_inputs WHERE id = ?", (hypothesis_id,), "diagnostic input")
+        after_payload = serialize_diagnostic_input(conn, after)
+        record_edit(conn, payload.project_id, None, "diagnostic_input", hypothesis_id, serialize_diagnosis(before), after_payload)
+        return after_payload
 
 
-@app.post("/api/diagnosis/hypotheses/generate")
+@app.post("/api/diagnostic-inputs/generate-hypotheses")
 def generate_diagnosis_hypotheses(
     payload: DiagnosisHypothesisPayload,
     authorization: str | None = Header(default=None),
@@ -3332,20 +3537,26 @@ problem_type 只能是 individual、manager、organization、ai_transformation�
         if payload.id:
             fetch_one_or_404(
                 conn,
-                "SELECT id FROM diagnosis_hypotheses WHERE id = ? AND project_id = ?",
+                "SELECT id FROM diagnostic_inputs WHERE id = ? AND project_id = ?",
                 (payload.id, payload.project_id),
-                "diagnosis hypothesis",
+                "diagnostic input",
             )
             conn.execute(
                 """
-                UPDATE diagnosis_hypotheses
+                UPDATE diagnostic_inputs
                 SET ai_extracted_hypotheses = ?, status = 'generated', updated_at = CURRENT_TIMESTAMP
                 WHERE id = ? AND project_id = ?
                 """,
                 (dumps(hypotheses), payload.id, payload.project_id),
             )
-            row = fetch_one_or_404(conn, "SELECT * FROM diagnosis_hypotheses WHERE id = ?", (payload.id,), "diagnosis hypothesis")
-            result = serialize_diagnosis(row)
+            replace_generated_hypothesis_items(
+                conn,
+                payload.project_id,
+                payload.id,
+                hypotheses,
+            )
+            row = fetch_one_or_404(conn, "SELECT * FROM diagnostic_inputs WHERE id = ?", (payload.id,), "diagnostic input")
+            result = serialize_diagnostic_input(conn, row)
         else:
             result = {**payload.model_dump(), "ai_extracted_hypotheses": hypotheses, "status": "generated"}
         result["ai_run_id"] = run_id
@@ -3368,17 +3579,90 @@ def confirm_diagnosis_hypothesis(
             (hypothesis_id,),
         )
         row = fetch_one_or_404(conn, "SELECT * FROM diagnosis_hypotheses WHERE id = ?", (hypothesis_id,), "diagnosis hypothesis")
-        return serialize_diagnosis(row)
+        return serialize_diagnosis_hypothesis_item(row)
 
 
-@app.delete("/api/diagnosis/hypotheses/{hypothesis_id}")
+@app.post("/api/projects/{project_id}/diagnosis-hypotheses/confirm")
+def confirm_project_diagnosis_hypotheses(
+    project_id: int,
+    payload: DiagnosisHypothesisConfirmPayload,
+    authorization: str | None = Header(default=None),
+) -> list[dict[str, Any]]:
+    require_admin_user(authorization)
+    selected_ids = list(dict.fromkeys(payload.hypothesis_ids))
+    if not selected_ids:
+        raise HTTPException(status_code=400, detail="请至少选择一条结构化诊断假设。")
+    placeholders = ",".join("?" for _ in selected_ids)
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT * FROM diagnosis_hypotheses
+            WHERE project_id = ? AND id IN ({placeholders})
+            """,
+            (project_id, *selected_ids),
+        ).fetchall()
+        if len(rows) != len(selected_ids):
+            raise HTTPException(status_code=400, detail="只能确认当前项目下的结构化诊断假设。")
+        conn.execute(
+            f"""
+            UPDATE diagnosis_hypotheses
+            SET status = 'confirmed', updated_at = CURRENT_TIMESTAMP
+            WHERE project_id = ? AND id IN ({placeholders})
+            """,
+            (project_id, *selected_ids),
+        )
+        confirmed_rows = conn.execute(
+            f"""
+            SELECT * FROM diagnosis_hypotheses
+            WHERE project_id = ? AND id IN ({placeholders})
+            ORDER BY updated_at DESC, id DESC
+            """,
+            (project_id, *selected_ids),
+        ).fetchall()
+        return [serialize_diagnosis_hypothesis_item(row) for row in confirmed_rows]
+
+
+@app.delete("/api/diagnostic-inputs/{hypothesis_id}")
 def delete_diagnosis_hypothesis(
     hypothesis_id: int,
     authorization: str | None = Header(default=None),
 ) -> dict[str, bool]:
     require_admin_user(authorization)
     with get_connection() as conn:
-        fetch_one_or_404(conn, "SELECT * FROM diagnosis_hypotheses WHERE id = ?", (hypothesis_id,), "diagnosis hypothesis")
+        fetch_one_or_404(conn, "SELECT * FROM diagnostic_inputs WHERE id = ?", (hypothesis_id,), "diagnostic input")
+        conn.execute("DELETE FROM diagnostic_inputs WHERE id = ?", (hypothesis_id,))
+    return {"deleted": True}
+
+
+@app.get("/api/diagnosis/hypotheses/{hypothesis_id}")
+def get_structured_diagnosis_hypothesis(
+    hypothesis_id: int,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    require_admin_user(authorization)
+    with get_connection() as conn:
+        row = fetch_one_or_404(
+            conn,
+            "SELECT * FROM diagnosis_hypotheses WHERE id = ?",
+            (hypothesis_id,),
+            "diagnosis hypothesis",
+        )
+        return serialize_diagnosis_hypothesis_item(row)
+
+
+@app.delete("/api/diagnosis/hypotheses/{hypothesis_id}")
+def delete_structured_diagnosis_hypothesis(
+    hypothesis_id: int,
+    authorization: str | None = Header(default=None),
+) -> dict[str, bool]:
+    require_admin_user(authorization)
+    with get_connection() as conn:
+        fetch_one_or_404(
+            conn,
+            "SELECT id FROM diagnosis_hypotheses WHERE id = ?",
+            (hypothesis_id,),
+            "diagnosis hypothesis",
+        )
         conn.execute("DELETE FROM diagnosis_hypotheses WHERE id = ?", (hypothesis_id,))
     return {"deleted": True}
 
@@ -3396,12 +3680,12 @@ def generate_talent_model(
         project = serialize_project(
             fetch_one_or_404(conn, "SELECT * FROM projects WHERE id = ?", (project_id,), "project")
         )
-        selected_ids = payload.hypothesis_ids or ([payload.hypothesis_id] if payload.hypothesis_id else [])
+        selected_ids = list(dict.fromkeys(payload.hypothesis_ids))
         if not selected_ids:
             raise HTTPException(status_code=400, detail="请至少选择一个已确认诊断假设。")
         placeholders = ",".join("?" for _ in selected_ids)
         selected_hypotheses = [
-            serialize_diagnosis(row)
+            serialize_diagnosis_hypothesis_item(row)
             for row in conn.execute(
                 f"""
                 SELECT * FROM diagnosis_hypotheses
@@ -3413,9 +3697,8 @@ def generate_talent_model(
         ]
         if len(selected_hypotheses) != len(set(selected_ids)):
             raise HTTPException(status_code=400, detail="只能选择当前项目下已确认的诊断假设。")
-        hypothesis = selected_hypotheses[0]
         confirmed_hypotheses = [
-            serialize_diagnosis(row)
+            serialize_diagnosis_hypothesis_item(row)
             for row in conn.execute(
                 """
                 SELECT * FROM diagnosis_hypotheses
@@ -3432,8 +3715,8 @@ def generate_talent_model(
 当前项目名称：{project['name']}
 当前项目诊断目标：{project.get('purpose') or project.get('description') or ''}
 模型模板：{payload.template}
-目标岗位：{payload.target_role or hypothesis.get('target_talent') or project.get('target_scope') or '管理者'}
-目标层级：{payload.target_level or hypothesis.get('target_scope') or '管理者'}
+目标岗位：{payload.target_role or project.get('target_scope') or '管理者'}
+目标层级：{payload.target_level or project.get('target_scope') or '管理者'}
 本次选中的已确认诊断假设：
 {dumps(selected_hypotheses)}
 当前项目全部已确认诊断假设：
@@ -3452,7 +3735,7 @@ def generate_talent_model(
 
     model.update({
         "project_id": project_id,
-        "hypothesis_id": hypothesis["id"],
+        "hypothesis_id": None,
         "status": "draft",
         "source_type": "ai_generated",
     })
@@ -3560,9 +3843,9 @@ def list_talent_models(
             params.append(project_id)
         rows = conn.execute(
             f"""
-            SELECT tm.*, dh.ai_extracted_hypotheses
+            SELECT tm.*, dhi.title AS hypothesis_title, dhi.description AS hypothesis_description
             FROM talent_models tm
-            LEFT JOIN diagnosis_hypotheses dh ON dh.id = tm.hypothesis_id
+            LEFT JOIN diagnosis_hypotheses dhi ON dhi.id = tm.hypothesis_id
             {where}
             ORDER BY tm.updated_at DESC, tm.id DESC
             """,
@@ -3773,12 +4056,32 @@ def generate_questionnaire_from_model(
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
     user = require_admin_user(authorization)
+    selected_hypothesis_ids = list(dict.fromkeys(payload.hypothesis_ids))
+    if not selected_hypothesis_ids:
+        raise HTTPException(status_code=400, detail="请至少选择一个已确认诊断假设。")
+    placeholders = ",".join("?" for _ in selected_hypothesis_ids)
     with get_connection() as conn:
         fetch_one_or_404(conn, "SELECT id FROM projects WHERE id = ?", (payload.project_id,), "project")
-        hypothesis = serialize_diagnosis(
-            fetch_one_or_404(conn, "SELECT * FROM diagnosis_hypotheses WHERE id = ?", (payload.hypothesis_id,), "diagnosis hypothesis")
-        )
+        hypothesis_rows = conn.execute(
+            f"""
+            SELECT * FROM diagnosis_hypotheses
+            WHERE project_id = ? AND status = 'confirmed' AND id IN ({placeholders})
+            ORDER BY updated_at DESC, id DESC
+            """,
+            (payload.project_id, *selected_hypothesis_ids),
+        ).fetchall()
+        if len(hypothesis_rows) != len(selected_hypothesis_ids):
+            raise HTTPException(
+                status_code=400,
+                detail="只能选择当前项目下已确认的诊断假设。",
+            )
+        hypotheses = [
+            serialize_diagnosis_hypothesis_item(row)
+            for row in hypothesis_rows
+        ]
         model = fetch_talent_model(conn, payload.model_id)
+        if model.get("project_id") != payload.project_id:
+            raise HTTPException(status_code=400, detail="只能选择当前项目下的胜任力模型。")
 
     system = "你是 360 问卷设计专家，熟悉 AI 时代胜任力模型，只输出可解析 JSON。"
     prompt = f"""
@@ -3788,7 +4091,7 @@ def generate_questionnaire_from_model(
 评价关系：{payload.relation_types}
 题目数量：{payload.question_count}
 风控边界：{payload.constraints}
-诊断假设：{dumps(hypothesis)}
+诊断假设：{dumps(hypotheses)}
 胜任力模型：{dumps(model)}
 """
     ai_text, used_fallback, error = chat_completion(system, prompt)
@@ -3798,6 +4101,11 @@ def generate_questionnaire_from_model(
         questions = fallback_questions_from_model(payload, model)
         used_fallback = True
         ai_text = dumps({"questions": questions, "fallback_reason": error or "AI output could not be parsed."})
+    else:
+        for index, question in enumerate(questions):
+            question["hypothesis_id"] = selected_hypothesis_ids[
+                index % len(selected_hypothesis_ids)
+            ]
 
     with get_connection() as conn:
         questionnaire = save_model_questionnaire(conn, payload, model, questions)
@@ -3828,7 +4136,7 @@ def generate_diagnosis_rules(
         hypothesis = None
         model = None
         if payload.hypothesis_id:
-            hypothesis = serialize_diagnosis(fetch_one_or_404(conn, "SELECT * FROM diagnosis_hypotheses WHERE id = ?", (payload.hypothesis_id,), "diagnosis hypothesis"))
+            hypothesis = serialize_diagnosis_hypothesis_item(fetch_one_or_404(conn, "SELECT * FROM diagnosis_hypotheses WHERE id = ?", (payload.hypothesis_id,), "diagnosis hypothesis"))
         if payload.model_id:
             model = fetch_talent_model(conn, payload.model_id)
     system = "你是组织诊断规则设计专家，只输出可解析 JSON。"
@@ -4765,10 +5073,50 @@ def generate_project_survey(
                 "behavior_observation",
                 payload.review360_question_count,
             )
-        if payload.competency_model_ids and not payload.model_id:
-            payload.model_id = payload.competency_model_ids[0]
+        selected_hypothesis_ids = list(dict.fromkeys(payload.hypothesis_ids))
+        if selected_hypothesis_ids:
+            placeholders = ",".join("?" for _ in selected_hypothesis_ids)
+            confirmed_count = conn.execute(
+                f"""
+                SELECT COUNT(*) AS count
+                FROM diagnosis_hypotheses
+                WHERE project_id = ? AND status = 'confirmed' AND id IN ({placeholders})
+                """,
+                (project_id, *selected_hypothesis_ids),
+            ).fetchone()["count"]
+            if confirmed_count != len(selected_hypothesis_ids):
+                raise HTTPException(
+                    status_code=400,
+                    detail="只能选择当前项目下已确认的诊断假设。",
+                )
+        selected_model_ids = list(
+            dict.fromkeys(
+                payload.competency_model_ids
+                or ([payload.model_id] if payload.model_id else [])
+            )
+        )
+        if selected_model_ids:
+            placeholders = ",".join("?" for _ in selected_model_ids)
+            model_count = conn.execute(
+                f"""
+                SELECT COUNT(*) AS count
+                FROM talent_models
+                WHERE project_id = ? AND id IN ({placeholders})
+                """,
+                (project_id, *selected_model_ids),
+            ).fetchone()["count"]
+            if model_count != len(selected_model_ids):
+                raise HTTPException(
+                    status_code=400,
+                    detail="只能选择当前项目下的胜任力模型。",
+                )
         questions = apply_survey_generation_config(
-            survey_questions_for_sources(conn, project_id, payload.source_mode, payload.model_id),
+            survey_questions_for_sources(
+                conn,
+                project_id,
+                payload.source_mode,
+                selected_model_ids,
+            ),
             payload,
         )
         if not questions:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 from pathlib import Path
@@ -203,7 +204,7 @@ def init_db() -> None:
                 expires_at TEXT
             );
 
-            CREATE TABLE IF NOT EXISTS diagnosis_hypotheses (
+            CREATE TABLE IF NOT EXISTS diagnostic_inputs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 project_id INTEGER,
                 created_by INTEGER,
@@ -336,6 +337,22 @@ def init_db() -> None:
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
 
+            CREATE TABLE IF NOT EXISTS diagnosis_hypotheses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                diagnostic_input_id INTEGER REFERENCES diagnostic_inputs(id) ON DELETE SET NULL,
+                source_index INTEGER NOT NULL DEFAULT 0,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                problem_type TEXT NOT NULL DEFAULT 'organization',
+                evidence_needed TEXT NOT NULL DEFAULT '',
+                related_dimensions TEXT NOT NULL DEFAULT '[]',
+                suggested_data_sources TEXT NOT NULL DEFAULT '[]',
+                status TEXT NOT NULL DEFAULT 'draft',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE TABLE IF NOT EXISTS expert_council_sessions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -416,7 +433,8 @@ def init_db() -> None:
                 total_question_count INTEGER NOT NULL DEFAULT 0,
                 status TEXT NOT NULL DEFAULT 'draft',
                 created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
 
             CREATE TABLE IF NOT EXISTS survey_responses (
@@ -591,6 +609,78 @@ def init_db() -> None:
         )
 
         # Lightweight migrations for local MVP databases created by earlier builds.
+        hypothesis_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(diagnosis_hypotheses)")
+        }
+        if "target_scope" in hypothesis_columns:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO diagnostic_inputs
+                    (id, project_id, created_by, target_scope, diagnosis_purpose,
+                     company_stage, hr_core_judgment, target_talent, focus_issues,
+                     constraints, expected_outputs, ai_extracted_hypotheses, status,
+                     created_at, updated_at)
+                SELECT id, project_id, created_by, target_scope, diagnosis_purpose,
+                       company_stage, hr_core_judgment, target_talent, focus_issues,
+                       constraints, expected_outputs, ai_extracted_hypotheses, status,
+                       created_at, updated_at
+                FROM diagnosis_hypotheses
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE diagnosis_hypotheses_migrated (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                    diagnostic_input_id INTEGER REFERENCES diagnostic_inputs(id) ON DELETE SET NULL,
+                    source_index INTEGER NOT NULL DEFAULT 0,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    problem_type TEXT NOT NULL DEFAULT 'organization',
+                    evidence_needed TEXT NOT NULL DEFAULT '',
+                    related_dimensions TEXT NOT NULL DEFAULT '[]',
+                    suggested_data_sources TEXT NOT NULL DEFAULT '[]',
+                    status TEXT NOT NULL DEFAULT 'draft',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            item_table_exists = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM sqlite_master
+                WHERE type = 'table' AND name = 'diagnosis_hypothesis_items'
+                """
+            ).fetchone()["count"]
+            if item_table_exists:
+                conn.execute(
+                    """
+                    INSERT INTO diagnosis_hypotheses_migrated
+                        (id, project_id, diagnostic_input_id, source_index, title,
+                         description, problem_type, evidence_needed, related_dimensions,
+                         suggested_data_sources, status, created_at, updated_at)
+                    SELECT id, project_id, diagnostic_input_id, source_index, title,
+                           description, problem_type, evidence_needed, related_dimensions,
+                           suggested_data_sources,
+                           CASE WHEN status = 'generated' THEN 'draft' ELSE status END,
+                           created_at, updated_at
+                    FROM diagnosis_hypothesis_items
+                    """
+                )
+                conn.execute("DROP TABLE diagnosis_hypothesis_items")
+            conn.execute("DROP TABLE diagnosis_hypotheses")
+            conn.execute(
+                "ALTER TABLE diagnosis_hypotheses_migrated RENAME TO diagnosis_hypotheses"
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_diagnosis_hypotheses_status
+                ON diagnosis_hypotheses(status, project_id)
+                """
+            )
+
         columns: dict[str, list[tuple[str, str]]] = {
             "projects": [
                 ("description", "TEXT NOT NULL DEFAULT ''"),
@@ -661,6 +751,7 @@ def init_db() -> None:
                 ("purpose", "TEXT NOT NULL DEFAULT ''"),
                 ("target_scope", "TEXT NOT NULL DEFAULT ''"),
                 ("total_question_count", "INTEGER NOT NULL DEFAULT 0"),
+                ("updated_at", "TEXT NOT NULL DEFAULT ''"),
             ],
             "survey_questions": [
                 ("hypothesis_id", "INTEGER"),
@@ -683,6 +774,93 @@ def init_db() -> None:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
 
         conn.execute("UPDATE questions SET content = text WHERE content = ''")
+        input_rows = conn.execute(
+            """
+            SELECT id, project_id, ai_extracted_hypotheses, status
+            FROM diagnostic_inputs
+            WHERE project_id IS NOT NULL
+            """
+        ).fetchall()
+        for input_row in input_rows:
+            existing_count = conn.execute(
+                "SELECT COUNT(*) AS count FROM diagnosis_hypotheses WHERE diagnostic_input_id = ?",
+                (input_row["id"],),
+            ).fetchone()["count"]
+            if existing_count:
+                continue
+            try:
+                extracted_items = json.loads(input_row["ai_extracted_hypotheses"] or "[]")
+            except (TypeError, json.JSONDecodeError):
+                extracted_items = []
+            if not isinstance(extracted_items, list):
+                continue
+            item_status = "confirmed" if input_row["status"] == "confirmed" else "generated"
+            for source_index, item in enumerate(extracted_items):
+                if not isinstance(item, dict):
+                    continue
+                title = str(item.get("hypothesis_title") or "").strip()
+                if not title:
+                    continue
+                conn.execute(
+                    """
+                    INSERT INTO diagnosis_hypotheses
+                        (project_id, diagnostic_input_id, source_index, title, description,
+                         problem_type, evidence_needed, related_dimensions,
+                         suggested_data_sources, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        input_row["project_id"],
+                        input_row["id"],
+                        source_index,
+                        title,
+                        str(item.get("hypothesis_detail") or ""),
+                        str(item.get("problem_type") or "organization"),
+                        str(item.get("suggested_validation_method") or ""),
+                        json.dumps(
+                            item.get("related_talent_dimensions")
+                            if isinstance(item.get("related_talent_dimensions"), list)
+                            else [],
+                            ensure_ascii=False,
+                        ),
+                        json.dumps(
+                            item.get("suggested_data_sources")
+                            if isinstance(item.get("suggested_data_sources"), list)
+                            else [],
+                            ensure_ascii=False,
+                        ),
+                        "confirmed" if item_status == "confirmed" else "draft",
+                    ),
+                )
+        conn.execute(
+            """
+            UPDATE survey_questions
+            SET hypothesis_id = NULL
+            WHERE hypothesis_id IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM diagnosis_hypotheses item
+                  WHERE item.id = survey_questions.hypothesis_id
+                    AND item.project_id = survey_questions.project_id
+              )
+            """
+        )
+        conn.execute(
+            """
+            UPDATE questions
+            SET hypothesis_id = NULL
+            WHERE hypothesis_id IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM diagnosis_hypotheses item
+                  WHERE item.id = questions.hypothesis_id
+                    AND item.project_id = questions.project_id
+              )
+            """
+        )
+        conn.execute(
+            "UPDATE surveys SET updated_at = created_at WHERE updated_at IS NULL OR updated_at = ''"
+        )
         conn.execute("UPDATE employees SET manager_name = manager WHERE manager_name = ''")
         conn.execute("UPDATE ai_runs SET run_type = feature WHERE run_type = ''")
         conn.execute("UPDATE ai_runs SET output_json = output_text WHERE output_json = '{}' AND output_text <> ''")
