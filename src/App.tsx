@@ -25,6 +25,16 @@ import {
 } from 'lucide-react';
 
 import { api } from './api';
+import {
+  DEMO_SESSION_VALUE,
+  cloneDemoData,
+  demoData,
+  demoUserForUsername,
+  initializeDemoData,
+  readDemoData,
+  writeDemoData,
+  type DemoData,
+} from './demoData';
 import type {
   AISettings,
   AdminDashboard,
@@ -62,6 +72,8 @@ import type {
   TalentModel,
   User,
 } from './types';
+
+const demoFallbackNotice = '真实接口不可用或返回为空，已使用本地演示数据兜底。';
 
 type Tab =
   | 'project'
@@ -704,6 +716,106 @@ export default function App() {
 
   const selectedProjectId = projectId ?? projects[0]?.id ?? null;
 
+  function applyDemoDataset(source: DemoData = readDemoData()) {
+    const project = source.projects[0] ?? cloneDemoData().projects[0];
+    const taskQuestions = source.questionnaire.dimensions.flatMap(
+      (dimension) => dimension.questions,
+    );
+    const firstTask = source.tasks[0] ?? null;
+    setProjects(source.projects);
+    setProjectId((value) => value ?? project.id);
+    setAdminDashboard(source.adminDashboard);
+    setProjectProgress(source.projectProgress);
+    setUsers(source.users);
+    setQuestionnaire(source.questionnaire);
+    setEmployees(source.employees);
+    setRelationships(source.relationships);
+    setAnalytics(source.analytics);
+    setReports(source.reports);
+    setAiRuns(source.aiRuns);
+    setEditHistory(source.editHistory);
+    setAdminTasks(source.tasks);
+    setEmployeeTasks(source.tasks);
+    setEmployeeSubmissions([
+      {
+        id: 1,
+        project_name: project.name,
+        reviewee_name: '王澈',
+        submitted_at: '2026-06-07 09:30:00',
+      },
+    ]);
+    setSelectedTaskId((value) => value ?? firstTask?.id ?? null);
+    setEmployeeTaskQuestionnaire(source.questionnaire);
+    setEmployeeScores(
+      Object.fromEntries(
+        taskQuestions.map((question) => [question.id ?? question.sort_order, 3]),
+      ),
+    );
+    setMyFeedback(source.feedback);
+    setAdminFeedback(source.feedback);
+    setFeedbackClusters(source.feedbackClusters);
+    setDiagnosisList(source.hypotheses);
+    setDiagnosisDraft(source.hypotheses[0] ?? { ...blankDiagnosis, project_id: project.id });
+    setSelectedDiagnosisId(source.hypotheses[0]?.id ?? null);
+    setTalentModels(source.talentModels);
+    setTalentDraft(source.talentModels[0] ?? { ...blankTalentModel, project_id: project.id });
+    setSelectedTalentModelId(source.talentModels[0]?.id ?? null);
+    setDiagnosisRules(source.diagnosisRules);
+    setRuleDraft(source.diagnosisRules[0] ?? { ...blankDiagnosisRule, project_id: project.id });
+    setOrganizationRisks(source.risks);
+    setOrganizationDashboard(source.organizationDashboard);
+    setDiagnosisReports(source.diagnosisReports);
+    setSelectedDiagnosisReportId(source.diagnosisReports[0]?.id ?? null);
+    setDiagnosisReportDraft(source.diagnosisReports[0]?.content ?? '');
+    setActionPlans(source.actionPlans);
+    setModelGeneratedQuestions(source.modelQuestions);
+    setExecutiveDashboard(source.executiveDashboard);
+    setOrgDiagnosisQuestions(source.organizationDimensions);
+    setOrgDiagnosisResult(source.orgResult);
+    setOrgDiagnosisScores(
+      Object.fromEntries(
+        source.organizationDimensions.flatMap((dimension) =>
+          dimension.questions.map((question) => [question.key, 3]),
+        ),
+      ),
+    );
+    setTalentProfiles(source.talentProfiles);
+    setMyTalentProfile(source.talentProfiles[0] ?? null);
+    setSurveys(source.questionnaires);
+    setSurveyTasks(source.questionnaires);
+    setOrganizationFeedbackItems(source.organizationFeedback);
+    setOrganizationFeedbackSummary(source.executiveDashboard.organization_feedback);
+    setOsReports(source.osReports);
+    setReportEmployeeId((value) => value ?? source.employees[0]?.id ?? null);
+    setSelectedReportId((value) => value ?? source.reports[0]?.id ?? null);
+    setReportDraft(source.reports[0]?.content ?? '');
+    setSelectedAssignmentId((value) => value ?? source.relationships[0]?.id ?? null);
+    setRelationshipForm((form) => ({
+      ...form,
+      subject_employee_id: form.subject_employee_id || source.employees[0]?.id || 0,
+      evaluator_employee_id: form.evaluator_employee_id || source.employees[0]?.id || 0,
+    }));
+    setError('');
+  }
+
+  function saveDemoMutation(mutator: (data: DemoData) => DemoData) {
+    const next = mutator(readDemoData());
+    writeDemoData(next);
+    applyDemoDataset(next);
+    return next;
+  }
+
+  function handleInitializeDemoData() {
+    const data = initializeDemoData();
+    applyDemoDataset(data);
+    setNotice('已初始化演示数据：项目、诊断假设、问卷、员工、任务、反馈、洞察和报告均已写入 localStorage。');
+  }
+
+  function fallbackToDemo(message = demoFallbackNotice) {
+    applyDemoDataset(readDemoData());
+    setNotice(message);
+  }
+
   async function bootstrap() {
     setBusy(true);
     setError('');
@@ -736,8 +848,12 @@ export default function App() {
         base_url: settings.base_url,
         model: settings.model,
       }));
-      setProjects(projectList);
-      if (projectList[0]) setProjectId((value) => value ?? projectList[0].id);
+      if (projectList.length) {
+        setProjects(projectList);
+        setProjectId((value) => value ?? projectList[0].id);
+      } else {
+        fallbackToDemo('真实接口返回空项目，已使用演示项目兜底。');
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : '后端连接失败');
     } finally {
@@ -1693,6 +1809,24 @@ export default function App() {
       setNotice('问卷已保存并记录人工修改');
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存问卷失败');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDeleteQuestionnaire() {
+    if (!projectId) return;
+    setBusy(true);
+    setError('');
+    try {
+      saveDemoMutation((data) => ({
+        ...data,
+        questionnaire: { dimensions: [] },
+        modelQuestions: [],
+      }));
+      setQuestionnaire({ dimensions: [] });
+      setModelGeneratedQuestions([]);
+      setNotice('问卷已删除，可重新生成演示问卷。');
     } finally {
       setBusy(false);
     }
@@ -6030,6 +6164,15 @@ export default function App() {
               设计评审项目、生成问卷、收集多方反馈、分析能力盲区与组织协作问题，并生成需要
               HR 确认的发展反馈报告。
             </p>
+            <div className="mt-5 flex flex-wrap gap-2">
+              <Button onClick={handleInitializeDemoData}>
+                <RefreshCw size={16} />
+                初始化演示数据
+              </Button>
+              <Button variant="secondary" onClick={() => goModule('login')}>
+                登录演示账号
+              </Button>
+            </div>
           </section>
 
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -6516,6 +6659,22 @@ export default function App() {
               >
                 <Save size={16} />
                 保存问卷
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={handleGenerateTasks}
+                disabled={busy || !questionnaire.dimensions.length}
+              >
+                <Send size={16} />
+                发放问卷
+              </Button>
+              <Button
+                variant="danger"
+                onClick={handleDeleteQuestionnaire}
+                disabled={busy || !questionnaire.dimensions.length}
+              >
+                <Trash2 size={16} />
+                删除问卷
               </Button>
             </>
           }
